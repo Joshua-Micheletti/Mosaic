@@ -1,5 +1,5 @@
 [project]
-name = "vulkan-test"
+name = "mosaic"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-vulkan-test = "vulkan_test.main:main"
+mosaic = "mosaic.main:main"
 
 [build-system]
 requires = ["uv_build>=0.13.1,<0.14.0"]
@@ -60,10 +60,15 @@ ignore = [
     "PYI041",
     "D203",
     "D212",
-    "CPY001"
+    "CPY001",
+    "D105",
+    "D107"
 ]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
 force-single-line = false
 known-first-party = ["myproject"]
+
+[tool.ruff.lint.pydocstyle]
+ignore-decorators = ["property"]
