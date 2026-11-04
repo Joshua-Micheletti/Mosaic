@@ -1,0 +1,69 @@
+[project]
+name = "vulkan-test"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Joshua-Micheletti", email = "joshua.e.n.micheletti@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "glfw>=2.11.0",
+    "vulkan>=1.3.275.1",
+]
+
+[project.scripts]
+vulkan-test = "vulkan_test.main:main"
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.2",
+    "ty>=0.0.91",
+]
+
+# Ruff configuration
+[tool.ruff]
+# Directories to lint
+src = ["src"]
+# Python version
+target-version = "py314"
+# Line length
+line-length = 100
+# Fix issues automatically when possible
+fix = true
+# Show how many warnings/errors were found
+show-fixes = true
+# Exclude files or folders
+exclude = [
+    ".git",
+    "__pycache__",
+    "venv",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+# Select which rules to enable
+select = ["ALL"]
+# Rules to ignore
+ignore = [
+    "T201",
+    "COM812",
+    "ERA001",
+    "D401",
+    "FBT001",
+    "FBT002",
+    "PYI041",
+    "D203",
+    "D212",
+    "CPY001"
+]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-single-line = false
+known-first-party = ["myproject"]
