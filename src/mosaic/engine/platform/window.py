@@ -1,4 +1,5 @@
 """Window Module."""
+from mosaic.engine.platform.backend.vulkan.vulkan_surface import VulkanSurface
 
 import glfw
 
@@ -24,6 +25,8 @@ class Window(Closable):
             glfw.terminate()
             error = "Failed to create GLFW window"
             raise RuntimeError(error)
+
+        self._surface = VulkanSurface()
 
     def close(self) -> None:
         """Close the window."""
