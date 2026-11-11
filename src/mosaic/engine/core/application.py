@@ -15,7 +15,7 @@ class Application(Closable):
         try:
             while not self.platform.window.should_close:
                 self.platform.poll_events()
-                self.platform.window.surface.draw_frame(self.platform.window.surface._device)
+                self.platform.window.surface.draw_frame()
                 # self.renderer.render()
 
         finally:
