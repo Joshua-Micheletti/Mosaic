@@ -1,11 +1,13 @@
-from typing import Any
 import ctypes
-from mosaic.engine.utils.vulkan.vulkan_utils import check
+from ctypes import _Pointer, byref, c_uint32, pointer
+from typing import Any
+
+import glfw
+import vulkan_py as vk
+
 from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice
 from mosaic.engine.platform.backend.vulkan.vulkan_surface import VulkanSurface
-import glfw
-from ctypes import _Pointer, pointer, byref, c_uint32
-import vulkan_py as vk
+from mosaic.engine.utils.vulkan.vulkan_utils import check
 
 
 class VulkanSwapchain:

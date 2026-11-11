@@ -1,14 +1,17 @@
-from mosaic.engine.platform.backend.vulkan.vulkan_swapchain import VulkanSwapchain
 import ctypes
 from ctypes import _Pointer, byref, c_uint32, pointer
+from typing import TYPE_CHECKING
 
-import glfw
 import vulkan_py as vk
 
 from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice
 from mosaic.engine.platform.backend.vulkan.vulkan_surface import VulkanSurface
+from mosaic.engine.platform.backend.vulkan.vulkan_swapchain import VulkanSwapchain
 from mosaic.engine.utils.lifecycle.closable import Closable
 from mosaic.engine.utils.vulkan.vulkan_utils import check
+
+if TYPE_CHECKING:
+    import glfw
 
 MAX_FRAMES_IN_FLIGHT = 2
 UINT64_MAX = 0xFFFFFFFFFFFFFFFF
