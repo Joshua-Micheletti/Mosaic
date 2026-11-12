@@ -1,3 +1,4 @@
+from mosaic.engine.utils.lifecycle.closable import Closable
 from ctypes import byref, c_char_p, c_float, c_uint32, pointer
 
 import vulkan_py as vk
@@ -5,7 +6,7 @@ import vulkan_py as vk
 from mosaic.engine.utils.vulkan.vulkan_utils import check
 
 
-class VulkanDevice:
+class VulkanDevice(Closable):
     _physical_device: vk.VkPhysicalDevice
     _raw_device: vk.VkDevice
     _device: vk.Device
@@ -47,6 +48,10 @@ class VulkanDevice:
     def __init__(self, instance: vk.Instance, surface: vk.VkSurfaceKHR) -> None:
         self._pick_physical_device(instance, surface)
         self._create_logical_device(instance)
+
+    def close(self) -> None:
+        """Close the device."""
+        self._device.device.vkDestroyDevice(None)
 
     def _pick_physical_device(self, instance: vk.Instance, surface: vk.VkSurfaceKHR) -> None:
         count = c_uint32(0)

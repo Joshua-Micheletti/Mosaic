@@ -7,16 +7,18 @@ import vulkan_py as vk
 
 from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice
 from mosaic.engine.platform.backend.vulkan.vulkan_surface import VulkanSurface
+from mosaic.engine.utils.lifecycle.closable import Closable
 from mosaic.engine.utils.vulkan.vulkan_utils import check
 
 
-class VulkanSwapchain:
+class VulkanSwapchain(Closable):
     _swapchain: vk.VkSwapchainKHR
     _swapchain_format: Any
     _swapchain_extent: Any | vk.VkExtent2D
     _swapchain_images: list[Any]
     _swapchain_image_views: list[vk.VkImageView]
     _render_pass: vk.VkRenderPass
+    _device: VulkanDevice
 
     @property
     def swapchain(self) -> vk.VkSwapchainKHR:
@@ -45,9 +47,19 @@ class VulkanSwapchain:
     def __init__(
         self, window: _Pointer[glfw._GLFWwindow], device: VulkanDevice, surface: VulkanSurface
     ) -> None:
+        self._device = device
         self._create_swapchain(window, device, surface)
         self._create_image_views(device)
         self._create_render_pass(device)
+
+    def close(self) -> None:
+        """Close the swapchain."""
+        self._device.device.vkDestroyRenderPass(self._render_pass, None)
+
+        for view in self._swapchain_image_views:
+            self._device.device.vkDestroyImageView(view, None)
+
+        self._device.device.vkDestroySwapchainKHR(self._swapchain, None)
 
     def _create_swapchain(
         self, window: _Pointer[glfw._GLFWwindow], device: VulkanDevice, surface: VulkanSurface
