@@ -4,19 +4,17 @@ from typing import TYPE_CHECKING
 
 import vulkan_py as vk
 
-from mosaic.engine.platform.backend.vulkan.vulkan_command_pool import VulkanCommandPool
 from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice
-from mosaic.engine.platform.backend.vulkan.vulkan_graphics_pipeline import VulkanGraphicsPipeline
+from mosaic.engine.platform.backend.vulkan.vulkan_frame_sync import VulkanFrameSync
 from mosaic.engine.platform.backend.vulkan.vulkan_surface import VulkanSurface
 from mosaic.engine.platform.backend.vulkan.vulkan_swapchain import VulkanSwapchain
 from mosaic.engine.utils.lifecycle.closable import Closable
-from mosaic.engine.utils.vulkan.vulkan_utils import check
+from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
 
 if TYPE_CHECKING:
     import glfw
 
 UINT64_MAX = 0xFFFFFFFFFFFFFFFF
-MAX_FRAMES_IN_FLIGHT = 2
 
 
 class VulkanBackend(Closable):
@@ -33,26 +31,33 @@ class VulkanBackend(Closable):
     def surface(self) -> VulkanSurface:
         return self._surface
 
+    @property
+    def swapchain(self) -> VulkanSwapchain:
+        return self._swapchain
+
     def __init__(self, window: _Pointer[glfw._GLFWwindow]) -> None:
         self._surface = VulkanSurface(window)
         self._device = VulkanDevice(self._surface.instance, self._surface.surface)
         self._swapchain = VulkanSwapchain(window, self._device, self._surface)
-        self._graphics_pipeline = VulkanGraphicsPipeline(self._device, self._swapchain)
-        self._command_pool = VulkanCommandPool(
-            self._device, self._swapchain, self._graphics_pipeline
-        )
+        self._frame_sync = VulkanFrameSync(self._device, self._swapchain)
         # https://github.com/StormMGamming41/vulkan-py/blob/main/examples/hello_triangle.py#L21
 
     def close(self) -> None:
         """Closing routine."""
-        self._command_pool.close()
-        self._graphics_pipeline.close()
+        self.wait_idle()
+        self._frame_sync.close()
         self._swapchain.close()
         self._device.close()
         self._surface.close()
 
-    def draw_frame(self):
-        fence = self._command_pool.in_flight_fences[self._command_pool.current_frame]
+    def wait_idle(self) -> None:
+        """Wait for all device work to finish."""
+        check(self._device.device.vkDeviceWaitIdle(), "vkDeviceWaitIdle")
+
+    def draw_frame(self, command_buffers: list[vk.VkCommandBuffer]) -> None:
+        """Acquire, submit, and present a frame using renderer-recorded commands."""
+        frame = self._frame_sync.current_frame
+        fence = self._frame_sync.in_flight_fences[frame]
         self._device.device.vkWaitForFences(1, byref(fence), 1, UINT64_MAX)
         self._device.device.vkResetFences(1, byref(fence))
 
@@ -60,23 +65,19 @@ class VulkanBackend(Closable):
         self._device.device.vkAcquireNextImageKHR(
             self._swapchain.swapchain,
             UINT64_MAX,
-            self._command_pool.image_available_semaphores[self._command_pool.current_frame],
+            self._frame_sync.image_available_semaphores[frame],
             vk.VkFence(0),
             byref(image_index),
         )
 
-        wait_semaphores = (vk.VkSemaphore * 1)(
-            self._command_pool.image_available_semaphores[self._command_pool.current_frame]
-        )
+        wait_semaphores = (vk.VkSemaphore * 1)(self._frame_sync.image_available_semaphores[frame])
         signal_semaphores = (vk.VkSemaphore * 1)(
-            self._command_pool.render_finished_semaphores[image_index.value]
-        )  # <-- changed
+            self._frame_sync.render_finished_semaphores[image_index.value]
+        )
         wait_stages = (ctypes.c_uint32 * 1)(
             vk.VkPipelineStageFlagBits.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
         )
-        cmd_buffers = (vk.VkCommandBuffer * 1)(
-            self._command_pool.command_buffers[image_index.value]
-        )
+        cmd_buffers = (vk.VkCommandBuffer * 1)(command_buffers[image_index.value])
 
         submit_info = vk.VkSubmitInfo(
             waitSemaphoreCount=1,
@@ -104,4 +105,4 @@ class VulkanBackend(Closable):
         )
         self._device.device.vkQueuePresentKHR(self._device.present_queue, byref(present_info))
 
-        self._command_pool.advance_frame()
+        self._frame_sync.advance_frame()

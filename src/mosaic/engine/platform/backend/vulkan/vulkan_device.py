@@ -1,9 +1,9 @@
-from mosaic.engine.utils.lifecycle.closable import Closable
-from ctypes import byref, c_char_p, c_float, c_uint32, pointer
+from ctypes import byref, c_char_p, c_float, c_uint32, c_void_p, cast, pointer
 
 import vulkan_py as vk
 
-from mosaic.engine.utils.vulkan.vulkan_utils import check
+from mosaic.engine.utils.lifecycle.closable import Closable
+from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
 
 
 class VulkanDevice(Closable):
@@ -51,7 +51,7 @@ class VulkanDevice(Closable):
 
     def close(self) -> None:
         """Close the device."""
-        self._device.device.vkDestroyDevice(None)
+        self._device.vkDestroyDevice(None)
 
     def _pick_physical_device(self, instance: vk.Instance, surface: vk.VkSurfaceKHR) -> None:
         count = c_uint32(0)
@@ -99,8 +99,22 @@ class VulkanDevice(Closable):
         device_extensions = [b"VK_KHR_swapchain"]
         ext_arr = (c_char_p * len(device_extensions))(*device_extensions)
         features = vk.VkPhysicalDeviceFeatures()  # nothing extra needed yet
+        # features.shaderDrawParameters = vk.VK_TRUE
+
+        supported_11 = vk.VkPhysicalDeviceVulkan11Features()
+        supported_features = vk.VkPhysicalDeviceFeatures2(
+            pNext=cast(pointer(supported_11), c_void_p)
+        )
+        instance.vkGetPhysicalDeviceFeatures2(self._physical_device, supported_features)
+
+        if not supported_11.shaderDrawParameters:
+            error = "Selected GPU does not support shaderDrawParameters"
+            raise RuntimeError(error)
+
+        enabled_11 = vk.VkPhysicalDeviceVulkan11Features(shaderDrawParameters=vk.VK_TRUE)
 
         create_info = vk.VkDeviceCreateInfo(
+            pNext=cast(pointer(enabled_11), c_void_p),
             queueCreateInfoCount=len(queue_infos),
             pQueueCreateInfos=queue_infos_arr,
             enabledExtensionCount=len(device_extensions),

@@ -1,23 +1,32 @@
 import ctypes
-from ctypes import _Pointer, byref, c_uint32, pointer
-from typing import Any
+from ctypes import _Pointer, byref, c_uint32
+from typing import TYPE_CHECKING, Any
 
 import glfw
 import vulkan_py as vk
 
-from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice
-from mosaic.engine.platform.backend.vulkan.vulkan_surface import VulkanSurface
 from mosaic.engine.utils.lifecycle.closable import Closable
-from mosaic.engine.utils.vulkan.vulkan_utils import check
+from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
+
+if TYPE_CHECKING:
+    from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice
+    from mosaic.engine.platform.backend.vulkan.vulkan_surface import VulkanSurface
+
+INVALID_EXTENT_SIZE = 0xFFFFFFFF
 
 
 class VulkanSwapchain(Closable):
+    """
+    Vulkan Swapchain Class.
+
+    Creates an object that manages images and presenting them to the window.
+    """
+
     _swapchain: vk.VkSwapchainKHR
     _swapchain_format: Any
     _swapchain_extent: Any | vk.VkExtent2D
     _swapchain_images: list[Any]
     _swapchain_image_views: list[vk.VkImageView]
-    _render_pass: vk.VkRenderPass
     _device: VulkanDevice
 
     @property
@@ -40,22 +49,15 @@ class VulkanSwapchain(Closable):
     def swapchain_image_views(self) -> list[vk.VkImageView]:
         return self._swapchain_image_views
 
-    @property
-    def render_pass(self) -> vk.VkRenderPass:
-        return self._render_pass
-
     def __init__(
         self, window: _Pointer[glfw._GLFWwindow], device: VulkanDevice, surface: VulkanSurface
     ) -> None:
         self._device = device
         self._create_swapchain(window, device, surface)
         self._create_image_views(device)
-        self._create_render_pass(device)
 
     def close(self) -> None:
         """Close the swapchain."""
-        self._device.device.vkDestroyRenderPass(self._render_pass, None)
-
         for view in self._swapchain_image_views:
             self._device.device.vkDestroyImageView(view, None)
 
@@ -64,11 +66,23 @@ class VulkanSwapchain(Closable):
     def _create_swapchain(
         self, window: _Pointer[glfw._GLFWwindow], device: VulkanDevice, surface: VulkanSurface
     ) -> None:
+        """
+        Create the vulkan swapchain object.
+
+        Args:
+            window (_Pointer[glfw._GLFWwindow]): GLFW window pointer.
+            device (VulkanDevice): Vulkan device.
+            surface (VulkanSurface): Vulkan surface.
+
+        """
+        # Extract the capabilities of the surface and choose the best format,
+        # present mode, and extent for the swapchain.
         caps = vk.VkSurfaceCapabilitiesKHR()
         surface.instance.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
             device.physical_device, surface.surface, byref(caps)
         )
 
+        # Extract the formats supported by the surface.
         fmt_count = c_uint32(0)
         surface.instance.vkGetPhysicalDeviceSurfaceFormatsKHR(
             device.physical_device, surface.surface, byref(fmt_count), None
@@ -77,7 +91,11 @@ class VulkanSwapchain(Closable):
         surface.instance.vkGetPhysicalDeviceSurfaceFormatsKHR(
             device.physical_device, surface.surface, byref(fmt_count), formats
         )
+
+        # choose the first format available by default
         chosen_format = formats[0]
+        # choose a better format if available
+        # in this case, B8G8R8A8_UNORM with SRGB nonlinear colorspace
         for f in formats:
             if (
                 f.format == vk.VkFormat.VK_FORMAT_B8G8R8A8_UNORM
@@ -86,6 +104,7 @@ class VulkanSwapchain(Closable):
                 chosen_format = f
                 break
 
+        # extract the present modes supported by the surface.
         mode_count = c_uint32(0)
         surface.instance.vkGetPhysicalDeviceSurfacePresentModesKHR(
             device.physical_device, surface.surface, byref(mode_count), None
@@ -94,20 +113,29 @@ class VulkanSwapchain(Closable):
         surface.instance.vkGetPhysicalDeviceSurfacePresentModesKHR(
             device.physical_device, surface.surface, byref(mode_count), modes
         )
+
+        # choose FIFO as default present mode.
+        # (FIRST IN FIRST OUT queue, frames are presented as they are ready)
         present_mode = vk.VkPresentModeKHR.VK_PRESENT_MODE_FIFO_KHR  # always guaranteed by the spec
+        # if MAILBOX is available, choose it as the present mode.
+        # (Skips frames if the queue is full, but always presents the most recent frame)
         if vk.VkPresentModeKHR.VK_PRESENT_MODE_MAILBOX_KHR in list(modes):
             present_mode = vk.VkPresentModeKHR.VK_PRESENT_MODE_MAILBOX_KHR
 
-        if caps.currentExtent.width != 0xFFFFFFFF:
+        # if the extent is valid, use it, otherwise, use the window size as the extent.
+        if caps.currentExtent.width != INVALID_EXTENT_SIZE:
             extent = caps.currentExtent
         else:
             fb_w, fb_h = glfw.get_framebuffer_size(window)
             extent = vk.VkExtent2D(width=fb_w, height=fb_h)
 
+        # determine the number of images in the swapchain.
         image_count = caps.minImageCount + 1
         if caps.maxImageCount != 0 and image_count > caps.maxImageCount:
             image_count = caps.maxImageCount
 
+        # if the graphics and present (queue) families are different, use concurrent sharing mode
+        # otherwise, use exclusive sharing mode.
         if device.graphics_family != device.present_family:
             indices = (c_uint32 * 2)(device.graphics_family, device.present_family)
             sharing_mode, index_count, indices_ptr = (
@@ -122,6 +150,7 @@ class VulkanSwapchain(Closable):
                 None,
             )
 
+        # create the swapchain with the chosen parameters.
         create_info = vk.VkSwapchainCreateInfoKHR(
             surface=surface.surface,
             minImageCount=image_count,
@@ -151,6 +180,7 @@ class VulkanSwapchain(Closable):
             extent,
         )
 
+        # extract the swapchain images from the swapchain object.
         img_count = c_uint32(0)
         device.device.vkGetSwapchainImagesKHR(self._swapchain, byref(img_count), None)
         images = (vk.VkImage * img_count.value)()
@@ -158,6 +188,13 @@ class VulkanSwapchain(Closable):
         self._swapchain_images = list(images)
 
     def _create_image_views(self, device: VulkanDevice) -> None:
+        """
+        Create the image views of the swapchain images.
+
+        Args:
+            device (VulkanDevice): Vulkan Device.
+
+        """
         self._swapchain_image_views = []
         for img in self._swapchain_images:
             create_info = vk.VkImageViewCreateInfo(
@@ -183,46 +220,3 @@ class VulkanSwapchain(Closable):
                 device.device.vkCreateImageView(create_info, None, byref(view)), "vkCreateImageView"
             )
             self._swapchain_image_views.append(view)
-
-    def _create_render_pass(self, device: VulkanDevice) -> None:
-        color_attachment = vk.VkAttachmentDescription(
-            format=self._swapchain_format,
-            samples=vk.VkSampleCountFlagBits.VK_SAMPLE_COUNT_1_BIT,
-            loadOp=vk.VkAttachmentLoadOp.VK_ATTACHMENT_LOAD_OP_CLEAR,
-            storeOp=vk.VkAttachmentStoreOp.VK_ATTACHMENT_STORE_OP_STORE,
-            stencilLoadOp=vk.VkAttachmentLoadOp.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-            stencilStoreOp=vk.VkAttachmentStoreOp.VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            initialLayout=vk.VkImageLayout.VK_IMAGE_LAYOUT_UNDEFINED,
-            finalLayout=vk.VkImageLayout.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-        )
-        color_ref = vk.VkAttachmentReference(
-            attachment=0, layout=vk.VkImageLayout.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-        )
-        subpass = vk.VkSubpassDescription(
-            pipelineBindPoint=vk.VkPipelineBindPoint.VK_PIPELINE_BIND_POINT_GRAPHICS,
-            colorAttachmentCount=1,
-            pColorAttachments=pointer(color_ref),
-        )
-        dependency = vk.VkSubpassDependency(
-            srcSubpass=vk.VK_SUBPASS_EXTERNAL,
-            dstSubpass=0,
-            srcStageMask=vk.VkPipelineStageFlagBits.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            dstStageMask=vk.VkPipelineStageFlagBits.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            srcAccessMask=0,
-            dstAccessMask=vk.VkAccessFlagBits.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-        )
-
-        create_info = vk.VkRenderPassCreateInfo(
-            attachmentCount=1,
-            pAttachments=pointer(color_attachment),
-            subpassCount=1,
-            pSubpasses=pointer(subpass),
-            dependencyCount=1,
-            pDependencies=pointer(dependency),
-        )
-        render_pass = vk.VkRenderPass()
-        check(
-            device.device.vkCreateRenderPass(create_info, None, byref(render_pass)),
-            "vkCreateRenderPass",
-        )
-        self._render_pass = render_pass

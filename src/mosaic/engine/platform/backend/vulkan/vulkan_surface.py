@@ -7,7 +7,7 @@ import glfw
 import vulkan_py as vk
 
 from mosaic.engine.utils.lifecycle.closable import Closable
-from mosaic.engine.utils.vulkan.vulkan_utils import check
+from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
 
 if TYPE_CHECKING:
     from ty_extensions._internal import Unknown
@@ -51,7 +51,7 @@ class VulkanSurface(Closable):
             applicationVersion=1,
             pEngineName=b"No Engine",  # Same here
             engineVersion=1,
-            apiVersion=(1 << 22),  # This tells Vulkan that we'll use API version 1.0
+            apiVersion=(1 << 22) | (4 << 12),  # This tells Vulkan that we'll use API version 1.4
         )
 
         # format the extension list in bytes and add the debug utils

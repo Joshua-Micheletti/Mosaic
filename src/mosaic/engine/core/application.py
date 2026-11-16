@@ -1,22 +1,20 @@
 """Application module."""
 
-from mosaic.engine.platform.platform import Platform
+from mosaic.engine.core.engine import Engine
 from mosaic.engine.utils.lifecycle.closable import Closable
+from mosaic.engine.utils.lifecycle.runnable import Runnable
 
 
-class Application(Closable):
+class Application(Closable, Runnable):
     """Class for starting the application."""
 
     def __init__(self) -> None:
-        self.platform = Platform()
+        self.engine = Engine()
 
     def run(self) -> None:
         """Run the application."""
         try:
-            while not self.platform.window.should_close:
-                self.platform.poll_events()
-                self.platform.window.surface.draw_frame()
-                # self.renderer.render()
+            self.engine.run()
 
         finally:
             self.close()
@@ -24,4 +22,4 @@ class Application(Closable):
     def close(self) -> None:
         """Turn off the application."""
         # self.renderer.close()
-        self.platform.close()
+        self.engine.close()
