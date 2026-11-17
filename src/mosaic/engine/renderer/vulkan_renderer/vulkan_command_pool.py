@@ -35,6 +35,7 @@ class VulkanCommandPool(Closable):
         self._device.device.vkDestroyCommandPool(self._command_pool, None)
 
     def _create_command_pool(self, device: VulkanDevice) -> None:
+        # create the command pool for the graphics queue family
         create_info = vk.VkCommandPoolCreateInfo(
             flags=vk.VkCommandPoolCreateFlagBits.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
             queueFamilyIndex=device.graphics_family,
@@ -46,6 +47,7 @@ class VulkanCommandPool(Closable):
         self._command_pool = pool
 
     def _create_command_buffers(self, device: VulkanDevice, command_buffer_count: int) -> None:
+        # allocate the command buffers from the command pool
         alloc_info = vk.VkCommandBufferAllocateInfo(
             commandPool=self._command_pool,
             level=vk.VkCommandBufferLevel.VK_COMMAND_BUFFER_LEVEL_PRIMARY,

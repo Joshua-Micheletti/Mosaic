@@ -1,8 +1,9 @@
 """Vulkan pass that owns and draws the starter triangle."""
 
 from __future__ import annotations
+from mosaic.engine.utils.vulkan.vulkan_utils.transition_image_layout import transition_image_layout
 
-from ctypes import byref, c_int32, pointer
+from ctypes import byref, c_int32, pointer, c_void_p, cast
 from typing import TYPE_CHECKING
 
 import vulkan_py as vk
@@ -29,17 +30,49 @@ class TrianglePass(RenderStage):
     def __init__(self, device: VulkanDevice, swapchain: VulkanSwapchain) -> None:
         self._device = device
         self._swapchain = swapchain
-        self._create_render_pass()
+        # self._create_render_pass()
         self._create_graphics_pipeline()
-        self._create_framebuffers()
+        # self._create_framebuffers()
 
     def record(self, command_buffer: vk.VkCommandBuffer, image_index: int) -> None:
         """Record the triangle draw for one swapchain image."""
+        # Before starting rendering, transition the swapchain image to vk::ImageLayout::eColorAttachmentOptimal
+        transition_image_layout(
+            device=self._device.device,
+            command_buffer=command_buffer,
+            image=self._swapchain.swapchain_images[image_index],
+            old_layout=vk.VkImageLayout.VK_IMAGE_LAYOUT_UNDEFINED,
+            new_layout=vk.VkImageLayout.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            src_access_mask=vk.VkAccessFlagBits2.VK_ACCESS_2_NONE,
+            dst_access_mask=vk.VkAccessFlagBits2.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+            src_stage_mask=vk.VkPipelineStageFlagBits2.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            dst_stage_mask=vk.VkPipelineStageFlagBits2.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+        )
+
         clear_value = vk.VkClearValue(color=vk.VkClearColorValue(float32=(0.01, 0.01, 0.02, 1.0)))
+
+        rendering_attachment_info = vk.VkRenderingAttachmentInfo(
+            imageView=self._swapchain.swapchain_image_views[image_index],
+            imageLayout=vk.VkImageLayout.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            loadOp=vk.VkAttachmentLoadOp.VK_ATTACHMENT_LOAD_OP_CLEAR,
+            storeOp=vk.VkAttachmentStoreOp.VK_ATTACHMENT_STORE_OP_STORE,
+            clearValue=clear_value
+        )
+
+        rendering_info = vk.VkRenderingInfo(
+            renderArea=vk.VkRect2D(
+                offset=vk.VkOffset2D(x=0, y=0),
+                extent=self._swapchain.swapchain_extent
+            ),
+            layerCount=1,
+            colorAttachmentCount=1,
+            pColorAttachments=pointer(rendering_attachment_info)
+        )
 
         # set the dynamic states for the pipeline
         self._device.device.vkCmdSetViewport(command_buffer, 0, 1, pointer(self._viewport))
         self._device.device.vkCmdSetScissor(command_buffer, 0, 1, pointer(self._scissor))
+
 
         render_pass_info = vk.VkRenderPassBeginInfo(
             renderPass=self._render_pass,
@@ -245,6 +278,13 @@ class TrianglePass(RenderStage):
         )
         self._pipeline_layout = pipeline_layout
 
+        color_formats = (c_int32 * 1)(self._swapchain.swapchain_format)
+        # create the metadata for the pipeline for dynamic rendering
+        pipeline_rendering_info = vk.VkPipelineRenderingCreateInfo(
+            colorAttachmentCount=len(color_formats),
+            pColorAttachmentFormats=color_formats
+        )
+
         # create the pipeline with all the provided info
         pipeline_info = vk.VkGraphicsPipelineCreateInfo(
             stageCount=2,
@@ -255,10 +295,11 @@ class TrianglePass(RenderStage):
             pRasterizationState=pointer(rasterizer),
             pMultisampleState=pointer(multisample),
             pColorBlendState=pointer(color_blend),
-            layout=pipeline_layout,
-            renderPass=self._render_pass,
-            subpass=0,
             pDynamicState=pointer(dynamic_state),
+            layout=pipeline_layout,
+            renderPass=vk.VkRenderPass(0), # nullptr
+            subpass=0,
+            pNext=cast(pointer(pipeline_rendering_info), c_void_p) # link the dynamic rendering info to the pipeline
         )
         pipeline = vk.VkPipeline()
         check(
