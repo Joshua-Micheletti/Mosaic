@@ -12,7 +12,7 @@ class Engine(Closable, Runnable):
 
     def __init__(self) -> None:
         self._platform = Platform()
-        self._renderer = Renderer(VulkanRenderer(self._platform.backend))
+        self._renderer = Renderer(driver=VulkanRenderer(self._platform.backend))
 
     def run(self) -> None:
         """Run the render loop until the window is closed."""

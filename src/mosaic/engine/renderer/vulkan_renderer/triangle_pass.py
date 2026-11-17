@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from ctypes import byref, pointer
+from ctypes import byref, c_int32, pointer
 from typing import TYPE_CHECKING
 
 import vulkan_py as vk
 
-from mosaic.engine.utils.lifecycle.closable import Closable
+from mosaic.engine.renderer.vulkan_renderer.vulkan_render_stage import RenderStage
 from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
 from mosaic.engine.utils.vulkan.vulkan_utils.shader import load_shader_module
 
@@ -16,13 +16,15 @@ if TYPE_CHECKING:
     from mosaic.engine.platform.backend.vulkan.vulkan_swapchain import VulkanSwapchain
 
 
-class TrianglePass(Closable):
+class TrianglePass(RenderStage):
     """Create the triangle's Vulkan resources and record its draw."""
 
     _render_pass: vk.VkRenderPass
     _pipeline_layout: vk.VkPipelineLayout
     _pipeline: vk.VkPipeline
     _framebuffers: list[vk.VkFramebuffer]
+    _viewport: vk.VkViewport
+    _scissor: vk.VkRect2D
 
     def __init__(self, device: VulkanDevice, swapchain: VulkanSwapchain) -> None:
         self._device = device
@@ -34,6 +36,11 @@ class TrianglePass(Closable):
     def record(self, command_buffer: vk.VkCommandBuffer, image_index: int) -> None:
         """Record the triangle draw for one swapchain image."""
         clear_value = vk.VkClearValue(color=vk.VkClearColorValue(float32=(0.01, 0.01, 0.02, 1.0)))
+
+        # set the dynamic states for the pipeline
+        self._device.device.vkCmdSetViewport(command_buffer, 0, 1, pointer(self._viewport))
+        self._device.device.vkCmdSetScissor(command_buffer, 0, 1, pointer(self._scissor))
+
         render_pass_info = vk.VkRenderPassBeginInfo(
             renderPass=self._render_pass,
             framebuffer=self._framebuffers[image_index],
@@ -56,6 +63,33 @@ class TrianglePass(Closable):
         )
         self._device.device.vkCmdDraw(command_buffer, 3, 1, 0, 0)
         self._device.device.vkCmdEndRenderPass(command_buffer)
+
+    def resize(self, width: int = 0, height: int = 0) -> None:
+        """
+        Resize the triangle pass.
+
+        Args:
+            width (int, optional): Width of the rendering area. If left at 0, the swapchain extent is used.
+            height (int, optional): Height of the rendering area. If left at 0, the swapchain extent is used.
+
+        """
+        # define the viewport, which represents the area of the framebuffer to render to
+        self._viewport = vk.VkViewport(
+            x=0.0,
+            y=0.0,
+            width=float(self._swapchain.swapchain_extent.width if width == 0 else width),
+            height=float(self._swapchain.swapchain_extent.height if height == 0 else height),
+            minDepth=0.0,
+            maxDepth=1.0,
+        )
+        # define the scissor, which represents a filter on the area of the framebuffer to render to
+        self._scissor = vk.VkRect2D(
+            offset=vk.VkOffset2D(x=0, y=0),
+            extent=vk.VkExtent2D(
+                width=self._swapchain.swapchain_extent.width if width == 0 else width,
+                height=self._swapchain.swapchain_extent.height if height == 0 else height,
+            ),
+        )
 
     def close(self) -> None:
         """Release resources owned by this pass."""
@@ -133,11 +167,15 @@ class TrianglePass(Closable):
         # store the stages in an array for the pipeline creation info
         stages = (vk.VkPipelineShaderStageCreateInfo * 2)(vert_stage, frag_stage)
 
+        # define the variables in the vertex shader and how they are laid out in memory
         vertex_input = vk.VkPipelineVertexInputStateCreateInfo()
+        # define the metadata of the pipeline,
+        # for example the primitive to use to render the vertices
         input_assembly = vk.VkPipelineInputAssemblyStateCreateInfo(
             topology=vk.VkPrimitiveTopology.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
         )
-        viewport = vk.VkViewport(
+        # define the viewport, which represents the area of the framebuffer to render to
+        self._viewport = vk.VkViewport(
             x=0.0,
             y=0.0,
             width=float(self._swapchain.swapchain_extent.width),
@@ -145,43 +183,69 @@ class TrianglePass(Closable):
             minDepth=0.0,
             maxDepth=1.0,
         )
-        scissor = vk.VkRect2D(
+        # define the scissor, which represents a filter on the area of the framebuffer to render to
+        self._scissor = vk.VkRect2D(
             offset=vk.VkOffset2D(x=0, y=0),
             extent=self._swapchain.swapchain_extent,
         )
-        viewport_state = vk.VkPipelineViewportStateCreateInfo(
-            viewportCount=1,
-            pViewports=pointer(viewport),
-            scissorCount=1,
-            pScissors=pointer(scissor),
+
+        # define the dynamic states for the pipeline
+        # allowing the user to change these configurations at runtime
+        # without recreating the pipeline
+        dynamic_states = (c_int32 * 2)(
+            vk.VkDynamicState.VK_DYNAMIC_STATE_VIEWPORT, vk.VkDynamicState.VK_DYNAMIC_STATE_SCISSOR
         )
+        dynamic_state = vk.VkPipelineDynamicStateCreateInfo(
+            dynamicStateCount=len(dynamic_states), pDynamicStates=dynamic_states
+        )
+
+        # create the viewport state (simple here cause of dynamic states)
+        viewport_state = vk.VkPipelineViewportStateCreateInfo(viewportCount=1, scissorCount=1)
+
+        # define the rasterizer, which converts the vertices into fragments
         rasterizer = vk.VkPipelineRasterizationStateCreateInfo(
-            polygonMode=vk.VkPolygonMode.VK_POLYGON_MODE_FILL,
+            polygonMode=vk.VkPolygonMode.VK_POLYGON_MODE_FILL,  # define how the fragments are generated from the vertices
+            depthClampEnable=vk.VK_FALSE,  # clamp the depth values instead of discarding fragments outside the near/far planes
+            rasterizerDiscardEnable=vk.VK_FALSE,
             cullMode=vk.VkCullModeFlagBits.VK_CULL_MODE_BACK_BIT,
             frontFace=vk.VkFrontFace.VK_FRONT_FACE_CLOCKWISE,
+            depthBiasEnable=vk.VK_FALSE,
             lineWidth=1.0,
         )
+
+        # configure the pipeline to enable hardware multisampling, which can help reduce aliasing artifacts
         multisample = vk.VkPipelineMultisampleStateCreateInfo(
             rasterizationSamples=vk.VkSampleCountFlagBits.VK_SAMPLE_COUNT_1_BIT
         )
+
+        # define how colors should be blended together when rendering to the framebuffer
         color_blend_attachment = vk.VkPipelineColorBlendAttachmentState(
             blendEnable=0,
-            colorWriteMask=0xF,
+            colorWriteMask=vk.VkColorComponentFlagBits.VK_COLOR_COMPONENT_R_BIT
+            | vk.VkColorComponentFlagBits.VK_COLOR_COMPONENT_G_BIT
+            | vk.VkColorComponentFlagBits.VK_COLOR_COMPONENT_B_BIT
+            | vk.VkColorComponentFlagBits.VK_COLOR_COMPONENT_A_BIT,
         )
         color_blend = vk.VkPipelineColorBlendStateCreateInfo(
             attachmentCount=1,
             pAttachments=pointer(color_blend_attachment),
         )
 
+        # create the pipeline layout,
+        # which defines the interface between the shader stages and the application
+        # (uniforms)
         pipeline_layout = vk.VkPipelineLayout()
         check(
             self._device.device.vkCreatePipelineLayout(
-                vk.VkPipelineLayoutCreateInfo(), None, byref(pipeline_layout)
+                vk.VkPipelineLayoutCreateInfo(setLayoutCount=0, pushConstantRangeCount=0),
+                None,
+                byref(pipeline_layout),
             ),
             "vkCreatePipelineLayout",
         )
         self._pipeline_layout = pipeline_layout
 
+        # create the pipeline with all the provided info
         pipeline_info = vk.VkGraphicsPipelineCreateInfo(
             stageCount=2,
             pStages=stages,
@@ -194,6 +258,7 @@ class TrianglePass(Closable):
             layout=pipeline_layout,
             renderPass=self._render_pass,
             subpass=0,
+            pDynamicState=pointer(dynamic_state),
         )
         pipeline = vk.VkPipeline()
         check(

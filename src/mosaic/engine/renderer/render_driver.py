@@ -1,9 +1,7 @@
-from typing import Protocol
+from mosaic.engine.utils.lifecycle.closable import Closable
+from mosaic.engine.utils.lifecycle.resizable import Resizable
+from mosaic.engine.utils.lifecycle.runnable import Runnable
 
 
-class RenderDriver(Protocol):
-    def run(self) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
+class RenderDriver(Closable, Runnable, Resizable):
+    """Render Driver."""
