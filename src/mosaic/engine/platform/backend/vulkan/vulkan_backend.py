@@ -1,3 +1,4 @@
+from enum import IntEnum
 import ctypes
 from ctypes import _Pointer, byref, c_uint32, pointer
 from typing import TYPE_CHECKING
@@ -11,17 +12,20 @@ from mosaic.engine.platform.backend.vulkan.vulkan_swapchain import VulkanSwapcha
 from mosaic.engine.utils.lifecycle.closable import Closable
 from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
 
-if TYPE_CHECKING:
-    import glfw
+import glfw
 
 UINT64_MAX = 0xFFFFFFFFFFFFFFFF
 
+class DrawFrameStatus(IntEnum):
+    OK = 0
+    RECREATE_SWAPCHAIN = 1
 
 class VulkanBackend(Closable):
     """Vulkan Backend class."""
 
     _device: VulkanDevice
     _surface: VulkanSurface
+    _window: _Pointer[glfw._GLFWwindow]
 
     @property
     def device(self) -> VulkanDevice:
@@ -36,6 +40,7 @@ class VulkanBackend(Closable):
         return self._swapchain
 
     def __init__(self, window: _Pointer[glfw._GLFWwindow]) -> None:
+        self._window = window
         self._surface = VulkanSurface(window)
         self._device = VulkanDevice(self._surface.instance, self._surface.surface)
         self._swapchain = VulkanSwapchain(window, self._device, self._surface)
@@ -54,31 +59,49 @@ class VulkanBackend(Closable):
         """Wait for all device work to finish."""
         check(self._device.device.vkDeviceWaitIdle(), "vkDeviceWaitIdle")
 
-    def draw_frame(self, command_buffers: list[vk.VkCommandBuffer]) -> None:
+    def draw_frame(self, command_buffers: list[vk.VkCommandBuffer]) -> DrawFrameStatus:
         """Acquire, submit, and present a frame using renderer-recorded commands."""
         frame = self._frame_sync.current_frame
         fence = self._frame_sync.in_flight_fences[frame]
-        self._device.device.vkWaitForFences(1, byref(fence), 1, UINT64_MAX)
-        self._device.device.vkResetFences(1, byref(fence))
+        fence_result = self._device.device.vkWaitForFences(1, byref(fence), 1, UINT64_MAX)
 
+        if fence_result != vk.VkResult.VK_SUCCESS:
+            error = "Failed to wait for fence"
+            raise RuntimeError(error)
+
+        # acquire the next image from the swapchain
         image_index = c_uint32(0)
-        self._device.device.vkAcquireNextImageKHR(
+        result = self._device.device.vkAcquireNextImageKHR(
             self._swapchain.swapchain,
-            UINT64_MAX,
-            self._frame_sync.image_available_semaphores[frame],
-            vk.VkFence(0),
-            byref(image_index),
+            UINT64_MAX,  # disable timeout, wait indefinitely
+            self._frame_sync.image_available_semaphores[frame],  # signal semaphore
+            vk.VkFence(0),  # no fence, we use the fence above
+            byref(image_index),  # output parameter for the acquired image index
         )
 
+        if result == vk.VkResult.VK_ERROR_OUT_OF_DATE_KHR:
+            return DrawFrameStatus.RECREATE_SWAPCHAIN
+
+        acquired_suboptimal = result == vk.VkResult.VK_SUBOPTIMAL_KHR
+        if result != vk.VkResult.VK_SUCCESS and not acquired_suboptimal:
+            check(result, "vkAcquireNextImageKHR")
+
+        self._device.device.vkResetFences(1, byref(fence))
+
+        # semaphores that signal when the swapchain image is available
         wait_semaphores = (vk.VkSemaphore * 1)(self._frame_sync.image_available_semaphores[frame])
+        # semaphores that signal when the rendering is finished
         signal_semaphores = (vk.VkSemaphore * 1)(
             self._frame_sync.render_finished_semaphores[image_index.value]
         )
+        # wait for the color attachment to be filled
         wait_stages = (ctypes.c_uint32 * 1)(
             vk.VkPipelineStageFlagBits.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
         )
+        # pick the command buffer to bind and execute
         cmd_buffers = (vk.VkCommandBuffer * 1)(command_buffers[image_index.value])
 
+        # compile the submit info with the synchronization steps and the command buffer to execute
         submit_info = vk.VkSubmitInfo(
             waitSemaphoreCount=1,
             pWaitSemaphores=wait_semaphores,
@@ -88,6 +111,7 @@ class VulkanBackend(Closable):
             signalSemaphoreCount=1,
             pSignalSemaphores=signal_semaphores,
         )
+        # submit the info to the queue
         check(
             self._device.device.vkQueueSubmit(
                 self._device.graphics_queue, 1, byref(submit_info), fence
@@ -103,6 +127,33 @@ class VulkanBackend(Closable):
             pSwapchains=swapchains,
             pImageIndices=pointer(image_index),
         )
-        self._device.device.vkQueuePresentKHR(self._device.present_queue, byref(present_info))
+        present_result = self._device.device.vkQueuePresentKHR(self._device.present_queue, byref(present_info))
 
         self._frame_sync.advance_frame()
+
+        if acquired_suboptimal or present_result in (
+            vk.VkResult.VK_SUBOPTIMAL_KHR,
+            vk.VkResult.VK_ERROR_OUT_OF_DATE_KHR,
+        ):
+            return DrawFrameStatus.RECREATE_SWAPCHAIN
+
+        check(present_result, "vkQueuePresentKHR")
+
+        return DrawFrameStatus.OK
+
+    def wait_for_nonzero_framebuffer(self) -> bool:
+        """Wait until the window can provide a non-zero swapchain extent."""
+        width, height = glfw.get_framebuffer_size(self._window)
+        while width == 0 or height == 0:
+            if glfw.window_should_close(self._window):
+                return False
+            glfw.wait_events()
+            width, height = glfw.get_framebuffer_size(self._window)
+        return True
+
+    def recreate_swapchain(self) -> None:
+        """Recreate swapchain resources after the renderer releases its dependents."""
+        self._frame_sync.close()
+        self._swapchain.close()
+        self._swapchain = VulkanSwapchain(self._window, self._device, self._surface)
+        self._frame_sync = VulkanFrameSync(self._device, self._swapchain)

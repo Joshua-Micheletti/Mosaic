@@ -1,9 +1,8 @@
 """Vulkan pass that owns and draws the starter triangle."""
 
 from __future__ import annotations
-from mosaic.engine.utils.vulkan.vulkan_utils.transition_image_layout import transition_image_layout
 
-from ctypes import byref, c_int32, pointer, c_void_p, cast
+from ctypes import byref, c_int32, c_void_p, cast, pointer
 from typing import TYPE_CHECKING
 
 import vulkan_py as vk
@@ -11,6 +10,7 @@ import vulkan_py as vk
 from mosaic.engine.renderer.vulkan_renderer.vulkan_render_stage import RenderStage
 from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
 from mosaic.engine.utils.vulkan.vulkan_utils.shader import load_shader_module
+from mosaic.engine.utils.vulkan.vulkan_utils.transition_image_layout import transition_image_layout
 
 if TYPE_CHECKING:
     from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice
@@ -30,9 +30,7 @@ class TrianglePass(RenderStage):
     def __init__(self, device: VulkanDevice, swapchain: VulkanSwapchain) -> None:
         self._device = device
         self._swapchain = swapchain
-        # self._create_render_pass()
         self._create_graphics_pipeline()
-        # self._create_framebuffers()
 
     def record(self, command_buffer: vk.VkCommandBuffer, image_index: int) -> None:
         """Record the triangle draw for one swapchain image."""
@@ -56,46 +54,50 @@ class TrianglePass(RenderStage):
             imageLayout=vk.VkImageLayout.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             loadOp=vk.VkAttachmentLoadOp.VK_ATTACHMENT_LOAD_OP_CLEAR,
             storeOp=vk.VkAttachmentStoreOp.VK_ATTACHMENT_STORE_OP_STORE,
-            clearValue=clear_value
+            clearValue=clear_value,
         )
 
         rendering_info = vk.VkRenderingInfo(
             renderArea=vk.VkRect2D(
-                offset=vk.VkOffset2D(x=0, y=0),
-                extent=self._swapchain.swapchain_extent
+                offset=vk.VkOffset2D(x=0, y=0), extent=self._swapchain.swapchain_extent
             ),
             layerCount=1,
             colorAttachmentCount=1,
-            pColorAttachments=pointer(rendering_attachment_info)
+            pColorAttachments=pointer(rendering_attachment_info),
+        )
+
+        # define the rendering commands
+        self._device.device.vkCmdBeginRendering(command_buffer, rendering_info)
+
+        # bind the graphics pipeline to the command buffer
+        self._device.device.vkCmdBindPipeline(
+            command_buffer,
+            vk.VkPipelineBindPoint.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            self._pipeline,
         )
 
         # set the dynamic states for the pipeline
         self._device.device.vkCmdSetViewport(command_buffer, 0, 1, pointer(self._viewport))
         self._device.device.vkCmdSetScissor(command_buffer, 0, 1, pointer(self._scissor))
 
-
-        render_pass_info = vk.VkRenderPassBeginInfo(
-            renderPass=self._render_pass,
-            framebuffer=self._framebuffers[image_index],
-            renderArea=vk.VkRect2D(
-                offset=vk.VkOffset2D(x=0, y=0),
-                extent=self._swapchain.swapchain_extent,
-            ),
-            clearValueCount=1,
-            pClearValues=pointer(clear_value),
-        )
-        self._device.device.vkCmdBeginRenderPass(
-            command_buffer,
-            byref(render_pass_info),
-            vk.VkSubpassContents.VK_SUBPASS_CONTENTS_INLINE,
-        )
-        self._device.device.vkCmdBindPipeline(
-            command_buffer,
-            vk.VkPipelineBindPoint.VK_PIPELINE_BIND_POINT_GRAPHICS,
-            self._pipeline,
-        )
+        # draw the triangle (3 vertices, 1 instance, first vertex = 0, first instance = 0)
         self._device.device.vkCmdDraw(command_buffer, 3, 1, 0, 0)
-        self._device.device.vkCmdEndRenderPass(command_buffer)
+        # finish the rendering commands
+        self._device.device.vkCmdEndRendering(command_buffer)
+
+        transition_image_layout(
+            device=self._device.device,
+            command_buffer=command_buffer,
+            image=self._swapchain.swapchain_images[image_index],
+            old_layout=vk.VkImageLayout.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            new_layout=vk.VkImageLayout.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            src_access_mask=vk.VkAccessFlagBits2.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+            dst_access_mask=vk.VkAccessFlagBits2.VK_ACCESS_2_NONE,
+            src_stage_mask=vk.VkPipelineStageFlagBits2.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            dst_stage_mask=vk.VkPipelineStageFlagBits2.VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+        )
+
+        # self._device.device.vkCmdEnd(command_buffer)
 
     def resize(self, width: int = 0, height: int = 0) -> None:
         """
@@ -126,55 +128,8 @@ class TrianglePass(RenderStage):
 
     def close(self) -> None:
         """Release resources owned by this pass."""
-        for framebuffer in self._framebuffers:
-            self._device.device.vkDestroyFramebuffer(framebuffer, None)
-
         self._device.device.vkDestroyPipeline(self._pipeline, None)
         self._device.device.vkDestroyPipelineLayout(self._pipeline_layout, None)
-        self._device.device.vkDestroyRenderPass(self._render_pass, None)
-
-    def _create_render_pass(self) -> None:
-        color_attachment = vk.VkAttachmentDescription(
-            format=self._swapchain.swapchain_format,
-            samples=vk.VkSampleCountFlagBits.VK_SAMPLE_COUNT_1_BIT,
-            loadOp=vk.VkAttachmentLoadOp.VK_ATTACHMENT_LOAD_OP_CLEAR,
-            storeOp=vk.VkAttachmentStoreOp.VK_ATTACHMENT_STORE_OP_STORE,
-            stencilLoadOp=vk.VkAttachmentLoadOp.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-            stencilStoreOp=vk.VkAttachmentStoreOp.VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            initialLayout=vk.VkImageLayout.VK_IMAGE_LAYOUT_UNDEFINED,
-            finalLayout=vk.VkImageLayout.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-        )
-        color_ref = vk.VkAttachmentReference(
-            attachment=0,
-            layout=vk.VkImageLayout.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        )
-        subpass = vk.VkSubpassDescription(
-            pipelineBindPoint=vk.VkPipelineBindPoint.VK_PIPELINE_BIND_POINT_GRAPHICS,
-            colorAttachmentCount=1,
-            pColorAttachments=pointer(color_ref),
-        )
-        dependency = vk.VkSubpassDependency(
-            srcSubpass=vk.VK_SUBPASS_EXTERNAL,
-            dstSubpass=0,
-            srcStageMask=vk.VkPipelineStageFlagBits.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            dstStageMask=vk.VkPipelineStageFlagBits.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            srcAccessMask=0,
-            dstAccessMask=vk.VkAccessFlagBits.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-        )
-        create_info = vk.VkRenderPassCreateInfo(
-            attachmentCount=1,
-            pAttachments=pointer(color_attachment),
-            subpassCount=1,
-            pSubpasses=pointer(subpass),
-            dependencyCount=1,
-            pDependencies=pointer(dependency),
-        )
-        render_pass = vk.VkRenderPass()
-        check(
-            self._device.device.vkCreateRenderPass(create_info, None, byref(render_pass)),
-            "vkCreateRenderPass",
-        )
-        self._render_pass = render_pass
 
     def _create_graphics_pipeline(self) -> None:
         # load the shaders
@@ -281,8 +236,7 @@ class TrianglePass(RenderStage):
         color_formats = (c_int32 * 1)(self._swapchain.swapchain_format)
         # create the metadata for the pipeline for dynamic rendering
         pipeline_rendering_info = vk.VkPipelineRenderingCreateInfo(
-            colorAttachmentCount=len(color_formats),
-            pColorAttachmentFormats=color_formats
+            colorAttachmentCount=len(color_formats), pColorAttachmentFormats=color_formats
         )
 
         # create the pipeline with all the provided info
@@ -297,9 +251,11 @@ class TrianglePass(RenderStage):
             pColorBlendState=pointer(color_blend),
             pDynamicState=pointer(dynamic_state),
             layout=pipeline_layout,
-            renderPass=vk.VkRenderPass(0), # nullptr
+            renderPass=vk.VkRenderPass(0),  # nullptr
             subpass=0,
-            pNext=cast(pointer(pipeline_rendering_info), c_void_p) # link the dynamic rendering info to the pipeline
+            pNext=cast(
+                pointer(pipeline_rendering_info), c_void_p
+            ),  # link the dynamic rendering info to the pipeline
         )
         pipeline = vk.VkPipeline()
         check(
@@ -312,21 +268,3 @@ class TrianglePass(RenderStage):
 
         self._device.device.vkDestroyShaderModule(vert_module, None)
         self._device.device.vkDestroyShaderModule(frag_module, None)
-
-    def _create_framebuffers(self) -> None:
-        self._framebuffers = []
-        for view in self._swapchain.swapchain_image_views:
-            create_info = vk.VkFramebufferCreateInfo(
-                renderPass=self._render_pass,
-                attachmentCount=1,
-                pAttachments=pointer(view),
-                width=self._swapchain.swapchain_extent.width,
-                height=self._swapchain.swapchain_extent.height,
-                layers=1,
-            )
-            framebuffer = vk.VkFramebuffer()
-            check(
-                self._device.device.vkCreateFramebuffer(create_info, None, byref(framebuffer)),
-                "vkCreateFramebuffer",
-            )
-            self._framebuffers.append(framebuffer)

@@ -69,6 +69,8 @@ class VulkanDevice(Closable):
                 continue
             props = vk.VkPhysicalDeviceProperties()
             instance.vkGetPhysicalDeviceProperties(pd, props)
+            if props.apiVersion < ((1 << 22) | (3 << 12)):
+                continue
             score = (
                 2
                 if props.deviceType == vk.VkPhysicalDeviceType.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
@@ -78,7 +80,7 @@ class VulkanDevice(Closable):
                 best = (score, pd, gfx, present, props.deviceName.decode(errors="ignore"))
 
         if best is None:
-            error = "No GPU with both graphics and present support found"
+            error = "No Vulkan 1.3 GPU with both graphics and present support found"
             raise RuntimeError(error)
 
         _, pd, gfx, present, name = best
@@ -99,9 +101,13 @@ class VulkanDevice(Closable):
         device_extensions = [b"VK_KHR_swapchain"]
         ext_arr = (c_char_p * len(device_extensions))(*device_extensions)
         features = vk.VkPhysicalDeviceFeatures()  # nothing extra needed yet
-        # features.shaderDrawParameters = vk.VK_TRUE
 
-        supported_11 = vk.VkPhysicalDeviceVulkan11Features()
+        # enable vulkan 1.3 features for synchronization2 and dynamic rendering,
+        # and 1.1 features for shaderDrawParameters
+        supported_13 = vk.VkPhysicalDeviceVulkan13Features()
+        supported_11 = vk.VkPhysicalDeviceVulkan11Features(
+            pNext=cast(pointer(supported_13), c_void_p)
+        )
         supported_features = vk.VkPhysicalDeviceFeatures2(
             pNext=cast(pointer(supported_11), c_void_p)
         )
@@ -110,8 +116,16 @@ class VulkanDevice(Closable):
         if not supported_11.shaderDrawParameters:
             error = "Selected GPU does not support shaderDrawParameters"
             raise RuntimeError(error)
+        if not supported_13.synchronization2 or not supported_13.dynamicRendering:
+            error = "Selected GPU does not support synchronization2 and dynamicRendering"
+            raise RuntimeError(error)
 
-        enabled_11 = vk.VkPhysicalDeviceVulkan11Features(shaderDrawParameters=vk.VK_TRUE)
+        enabled_13 = vk.VkPhysicalDeviceVulkan13Features(
+            synchronization2=vk.VK_TRUE, dynamicRendering=vk.VK_TRUE
+        )
+        enabled_11 = vk.VkPhysicalDeviceVulkan11Features(
+            pNext=cast(pointer(enabled_13), c_void_p), shaderDrawParameters=vk.VK_TRUE
+        )
 
         create_info = vk.VkDeviceCreateInfo(
             pNext=cast(pointer(enabled_11), c_void_p),
