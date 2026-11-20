@@ -1,5 +1,5 @@
 struct VertexOutput {
-    float4 sv_position : SV_Position;
+    float4 pos : SV_Position;
     float3 color;
 };
 

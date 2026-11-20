@@ -17,6 +17,8 @@ class VulkanDevice(Closable):
     _present_family: int
     _present_queue: vk.VkQueue
 
+    _memory_properties: vk.VkPhysicalDeviceMemoryProperties
+
     @property
     def physical_device(self) -> vk.VkPhysicalDevice:
         return self._physical_device
@@ -44,6 +46,10 @@ class VulkanDevice(Closable):
     @property
     def present_queue(self) -> vk.VkQueue:
         return self._present_queue
+
+    @property
+    def memory_properties(self) -> vk.VkPhysicalDeviceMemoryProperties:
+        return self._memory_properties
 
     def __init__(self, instance: vk.Instance, surface: vk.VkSurfaceKHR) -> None:
         self._pick_physical_device(instance, surface)
@@ -85,6 +91,13 @@ class VulkanDevice(Closable):
 
         _, pd, gfx, present, name = best
         self._physical_device, self._graphics_family, self._present_family = pd, gfx, present
+
+        self._memory_properties = vk.VkPhysicalDeviceMemoryProperties()
+        instance.vkGetPhysicalDeviceMemoryProperties(
+            self._physical_device,
+            byref(self._memory_properties),
+        )
+
         print(f"Using GPU: {name} (graphics family={gfx}, present family={present})")
 
     def _create_logical_device(self, instance: vk.Instance) -> None:

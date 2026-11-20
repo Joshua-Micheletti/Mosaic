@@ -1,10 +1,15 @@
 """Vulkan pass that owns and draws the starter triangle."""
 
 from __future__ import annotations
+import ctypes
+from mosaic.engine.utils.vulkan.vulkan_utils.memory import find_memory_type
 
+import struct
 from ctypes import byref, c_int32, c_void_p, cast, pointer
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import glm
 import vulkan_py as vk
 
 from mosaic.engine.renderer.vulkan_renderer.vulkan_render_stage import RenderStage
@@ -15,6 +20,12 @@ from mosaic.engine.utils.vulkan.vulkan_utils.transition_image_layout import tran
 if TYPE_CHECKING:
     from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice
     from mosaic.engine.platform.backend.vulkan.vulkan_swapchain import VulkanSwapchain
+
+
+@dataclass
+class Vertex:
+    pos: glm.vec2
+    color: glm.vec3
 
 
 class TrianglePass(RenderStage):
@@ -76,6 +87,17 @@ class TrianglePass(RenderStage):
             self._pipeline,
         )
 
+        vertex_buffers = (vk.VkBuffer * 1)(self._vertex_buffer)
+        offsets = (ctypes.c_uint64 * 1)(0)
+
+        self._device.device.vkCmdBindVertexBuffers(
+            command_buffer,
+            0,  # first binding
+            1,  # number of buffers
+            vertex_buffers,
+            offsets,
+        )
+
         # set the dynamic states for the pipeline
         self._device.device.vkCmdSetViewport(command_buffer, 0, 1, pointer(self._viewport))
         self._device.device.vkCmdSetScissor(command_buffer, 0, 1, pointer(self._scissor))
@@ -128,6 +150,8 @@ class TrianglePass(RenderStage):
 
     def close(self) -> None:
         """Release resources owned by this pass."""
+        self._device.device.vkDestroyBuffer(self._vertex_buffer, None)
+        self._device.device.vkFreeMemory(self._vertex_buffer_memory, None)
         self._device.device.vkDestroyPipeline(self._pipeline, None)
         self._device.device.vkDestroyPipelineLayout(self._pipeline_layout, None)
 
@@ -156,7 +180,101 @@ class TrianglePass(RenderStage):
         stages = (vk.VkPipelineShaderStageCreateInfo * 2)(vert_stage, frag_stage)
 
         # define the variables in the vertex shader and how they are laid out in memory
-        vertex_input = vk.VkPipelineVertexInputStateCreateInfo()
+        vertices = [
+            Vertex(glm.vec2(0.0, -0.5), glm.vec3(1.0, 0.0, 0.0)),
+            Vertex(glm.vec2(0.5, 0.5), glm.vec3(0.0, 1.0, 0.0)),
+            Vertex(glm.vec2(-0.5, 0.5), glm.vec3(0.0, 0.0, 1.0)),
+        ]
+
+        packed_vertices = b"".join(
+            struct.pack("<5f", *vertex.pos, *vertex.color) for vertex in vertices
+        )
+
+        buffer_info = vk.VkBufferCreateInfo(
+            size=len(packed_vertices),
+            usage=vk.VkBufferUsageFlagBits.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            sharingMode=vk.VkSharingMode.VK_SHARING_MODE_EXCLUSIVE,
+        )
+
+        self._vertex_buffer = vk.VkBuffer()
+        check(
+            self._device.device.vkCreateBuffer(buffer_info, None, byref(self._vertex_buffer)),
+            "vkCreateBuffer",
+        )
+
+        memory_requirements = vk.VkMemoryRequirements()
+
+        self._device.device.vkGetBufferMemoryRequirements(self._vertex_buffer, byref(memory_requirements))
+
+        memory_properties = self._device.memory_properties
+
+        memory_allocate_info = vk.VkMemoryAllocateInfo(
+            allocationSize=memory_requirements.size,
+            memoryTypeIndex=find_memory_type(
+                type_filter=memory_requirements.memoryTypeBits,
+                properties=vk.VkMemoryPropertyFlagBits.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                | vk.VkMemoryPropertyFlagBits.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                memory_properties=memory_properties,
+            ),
+        )
+
+        self._vertex_buffer_memory = vk.VkDeviceMemory()
+        check(
+            self._device.device.vkAllocateMemory(
+                memory_allocate_info,
+                None,
+                byref(self._vertex_buffer_memory),
+            ),
+            "vkAllocateMemory",
+        )
+
+        check(
+            self._device.device.vkBindBufferMemory(
+                self._vertex_buffer,
+                self._vertex_buffer_memory,
+                0,
+            ),
+            "vkBindBufferMemory",
+        )
+
+        mapped = c_void_p()
+        size = len(packed_vertices)
+
+        check(
+            self._device.device.vkMapMemory(
+                self._vertex_buffer_memory, 0, size, 0, byref(mapped)
+            ),
+            "vkMapMemory",
+        )
+
+        ctypes.memmove(mapped, packed_vertices, size)
+        self._device.device.vkUnmapMemory(self._vertex_buffer_memory)
+
+        binding = vk.VkVertexInputBindingDescription(
+            binding=0,  # define the binding position
+            stride=20,  # define the length of the single data ((2 + 3) * 4)
+            # specify if the data should change per vertex or per instance
+            inputRate=vk.VkVertexInputRate.VK_VERTEX_INPUT_RATE_VERTEX,
+        )
+
+        bindings = (vk.VkVertexInputBindingDescription * 1)(binding)
+
+        attribute_pos = vk.VkVertexInputAttributeDescription(
+            location=0, binding=0, format=vk.VkFormat.VK_FORMAT_R32G32_SFLOAT, offset=0
+        )
+
+        attribute_col = vk.VkVertexInputAttributeDescription(
+            location=1, binding=0, format=vk.VkFormat.VK_FORMAT_R32G32B32_SFLOAT, offset=8
+        )
+
+        attributes = (vk.VkVertexInputAttributeDescription * 2)(attribute_pos, attribute_col)
+
+        vertex_input = vk.VkPipelineVertexInputStateCreateInfo(
+            vertexBindingDescriptionCount=len(bindings),
+            pVertexBindingDescriptions=bindings,
+            vertexAttributeDescriptionCount=len(attributes),
+            pVertexAttributeDescriptions=attributes,
+        )
         # define the metadata of the pipeline,
         # for example the primitive to use to render the vertices
         input_assembly = vk.VkPipelineInputAssemblyStateCreateInfo(
