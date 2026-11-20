@@ -1,9 +1,14 @@
 """Platform module."""
 
+from typing import TYPE_CHECKING
+
 import glfw
 
 from mosaic.engine.platform.backend.vulkan.vulkan_backend import VulkanBackend
-from mosaic.engine.platform.window import Window
+from mosaic.engine.platform.window.glfw_window import GLFWWindow
+
+if TYPE_CHECKING:
+    from mosaic.engine.platform.window.window import Window
 
 
 class Platform:
@@ -22,8 +27,8 @@ class Platform:
             error = "Failed to initialize GLFW"
             raise RuntimeError(error)
 
-        self._window = Window()
-        self._backend = VulkanBackend(self._window.window)
+        self._window = GLFWWindow("Mosaic", 1280, 720)
+        self._backend = VulkanBackend(self._window)
 
     def poll_events(self) -> None:
         """Poll the events from the platform."""

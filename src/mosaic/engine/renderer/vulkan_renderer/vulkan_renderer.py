@@ -1,7 +1,6 @@
 """Vulkan rendering implementation."""
 
 from __future__ import annotations
-from mosaic.engine.platform.backend.vulkan.vulkan_backend import DrawFrameStatus
 
 from typing import TYPE_CHECKING
 
@@ -33,12 +32,8 @@ class VulkanRenderer(RenderDriver):
         """Render and present one frame."""
         result = self._backend.draw_frame(self._command_pool.command_buffers)
 
-        if (
-            result == DrawFrameStatus.RECREATE_SWAPCHAIN
-            and self._backend.wait_for_nonzero_framebuffer()
-        ):
+        if result == DrawFrameStatus.RECREATE_SWAPCHAIN and self._backend.wait_for_framebuffer():
             self._recreate_swapchain_resources()
-
 
     def resize(self, width: int = 0, height: int = 0) -> None:
         """

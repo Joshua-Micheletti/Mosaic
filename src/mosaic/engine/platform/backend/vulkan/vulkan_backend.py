@@ -1,7 +1,6 @@
-from enum import IntEnum
 import ctypes
-from ctypes import _Pointer, byref, c_uint32, pointer
-from typing import TYPE_CHECKING
+from ctypes import byref, c_uint32, pointer
+from enum import IntEnum
 
 import vulkan_py as vk
 
@@ -9,23 +8,24 @@ from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice
 from mosaic.engine.platform.backend.vulkan.vulkan_frame_sync import VulkanFrameSync
 from mosaic.engine.platform.backend.vulkan.vulkan_surface import VulkanSurface
 from mosaic.engine.platform.backend.vulkan.vulkan_swapchain import VulkanSwapchain
+from mosaic.engine.platform.window.window import Window
 from mosaic.engine.utils.lifecycle.closable import Closable
 from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
 
-import glfw
-
 UINT64_MAX = 0xFFFFFFFFFFFFFFFF
+
 
 class DrawFrameStatus(IntEnum):
     OK = 0
     RECREATE_SWAPCHAIN = 1
+
 
 class VulkanBackend(Closable):
     """Vulkan Backend class."""
 
     _device: VulkanDevice
     _surface: VulkanSurface
-    _window: _Pointer[glfw._GLFWwindow]
+    _window: Window
 
     @property
     def device(self) -> VulkanDevice:
@@ -39,11 +39,11 @@ class VulkanBackend(Closable):
     def swapchain(self) -> VulkanSwapchain:
         return self._swapchain
 
-    def __init__(self, window: _Pointer[glfw._GLFWwindow]) -> None:
+    def __init__(self, window: Window) -> None:
         self._window = window
         self._surface = VulkanSurface(window)
         self._device = VulkanDevice(self._surface.instance, self._surface.surface)
-        self._swapchain = VulkanSwapchain(window, self._device, self._surface)
+        self._swapchain = VulkanSwapchain(window.width, window.height, self._device, self._surface)
         self._frame_sync = VulkanFrameSync(self._device, self._swapchain)
         # https://github.com/StormMGamming41/vulkan-py/blob/main/examples/hello_triangle.py#L21
 
@@ -65,9 +65,7 @@ class VulkanBackend(Closable):
         fence = self._frame_sync.in_flight_fences[frame]
         fence_result = self._device.device.vkWaitForFences(1, byref(fence), 1, UINT64_MAX)
 
-        if fence_result != vk.VkResult.VK_SUCCESS:
-            error = "Failed to wait for fence"
-            raise RuntimeError(error)
+        check(fence_result, "vkWaitForFences")
 
         # acquire the next image from the swapchain
         image_index = c_uint32(0)
@@ -127,7 +125,9 @@ class VulkanBackend(Closable):
             pSwapchains=swapchains,
             pImageIndices=pointer(image_index),
         )
-        present_result = self._device.device.vkQueuePresentKHR(self._device.present_queue, byref(present_info))
+        present_result = self._device.device.vkQueuePresentKHR(
+            self._device.present_queue, byref(present_info)
+        )
 
         self._frame_sync.advance_frame()
 
@@ -141,19 +141,13 @@ class VulkanBackend(Closable):
 
         return DrawFrameStatus.OK
 
-    def wait_for_nonzero_framebuffer(self) -> bool:
-        """Wait until the window can provide a non-zero swapchain extent."""
-        width, height = glfw.get_framebuffer_size(self._window)
-        while width == 0 or height == 0:
-            if glfw.window_should_close(self._window):
-                return False
-            glfw.wait_events()
-            width, height = glfw.get_framebuffer_size(self._window)
-        return True
-
     def recreate_swapchain(self) -> None:
         """Recreate swapchain resources after the renderer releases its dependents."""
         self._frame_sync.close()
         self._swapchain.close()
-        self._swapchain = VulkanSwapchain(self._window, self._device, self._surface)
+        size = self._window.size
+        self._swapchain = VulkanSwapchain(size[0], size[1], self._device, self._surface)
         self._frame_sync = VulkanFrameSync(self._device, self._swapchain)
+
+    def wait_for_framebuffer(self) -> bool:
+        return self._window.wait_for_framebuffer()

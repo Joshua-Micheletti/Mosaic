@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import glfw
 import vulkan_py as vk
 
+from mosaic.engine.platform.window.window import Window
 from mosaic.engine.utils.lifecycle.closable import Closable
 from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
 
@@ -30,7 +31,7 @@ class VulkanSurface(Closable):
     def surface(self) -> vk.VkSurfaceKHR:
         return self._surface
 
-    def __init__(self, window: _Pointer[glfw._GLFWwindow]) -> None:
+    def __init__(self, window: Window) -> None:
         self._init_instance()
         self._init_debug()
         self._init_surface(window)
@@ -114,17 +115,11 @@ class VulkanSurface(Closable):
         check(result, "vkCreateDebugUtilsMessengerEXT")
         self._debug_messenger = messenger
 
-    def _init_surface(self, window: _Pointer[glfw._GLFWwindow]) -> None:
-        surface_handle = c_void_p(0)
-        result = glfw.create_window_surface(
-            self._instance_handle.value, window, None, byref(surface_handle)
-        )
-        if result != 0:
-            error = f"glfwCreateWindowSurface failed: {result}"
-            raise RuntimeError(error)
+    def _init_surface(self, window: Window) -> None:
+        surface_handle = window.create_surface(self._instance_handle.value)
 
-        if surface_handle.value is not None:
-            self._surface = vk.VkSurfaceKHR(surface_handle.value)
+        if surface_handle is not None:
+            self._surface = vk.VkSurfaceKHR(surface_handle)
 
     def _debug_callback(
         self,

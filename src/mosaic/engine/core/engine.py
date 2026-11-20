@@ -18,6 +18,11 @@ class Engine(Closable, Runnable):
         """Run the render loop until the window is closed."""
         while not self._platform.window.should_close:
             self._platform.poll_events()
+
+            size = self._platform.window.handle_resize()
+            if size is not None:
+                self._renderer.resize(width=size[0], height=size[1])
+
             self._renderer.run()
 
     def close(self) -> None:

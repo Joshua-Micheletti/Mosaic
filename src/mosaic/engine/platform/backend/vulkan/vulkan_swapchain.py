@@ -1,8 +1,7 @@
 import ctypes
-from ctypes import _Pointer, byref, c_uint32
+from ctypes import byref, c_uint32
 from typing import TYPE_CHECKING, Any
 
-import glfw
 import vulkan_py as vk
 
 from mosaic.engine.utils.lifecycle.closable import Closable
@@ -50,10 +49,10 @@ class VulkanSwapchain(Closable):
         return self._swapchain_image_views
 
     def __init__(
-        self, window: _Pointer[glfw._GLFWwindow], device: VulkanDevice, surface: VulkanSurface
+        self, width: int, height: int, device: VulkanDevice, surface: VulkanSurface
     ) -> None:
         self._device = device
-        self._create_swapchain(window, device, surface)
+        self._create_swapchain(width, height, device, surface)
         self._create_image_views(device)
 
     def close(self) -> None:
@@ -64,7 +63,7 @@ class VulkanSwapchain(Closable):
         self._device.device.vkDestroySwapchainKHR(self._swapchain, None)
 
     def _create_swapchain(
-        self, window: _Pointer[glfw._GLFWwindow], device: VulkanDevice, surface: VulkanSurface
+        self, width: int, height: int, device: VulkanDevice, surface: VulkanSurface
     ) -> None:
         """
         Create the vulkan swapchain object.
@@ -126,8 +125,7 @@ class VulkanSwapchain(Closable):
         if caps.currentExtent.width != INVALID_EXTENT_SIZE:
             extent = caps.currentExtent
         else:
-            fb_w, fb_h = glfw.get_framebuffer_size(window)
-            extent = vk.VkExtent2D(width=fb_w, height=fb_h)
+            extent = vk.VkExtent2D(width=width, height=height)
 
         # determine the number of images in the swapchain.
         image_count = caps.minImageCount + 1
