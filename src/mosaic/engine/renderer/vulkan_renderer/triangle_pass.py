@@ -1,9 +1,8 @@
 """Vulkan pass that owns and draws the starter triangle."""
 
 from __future__ import annotations
-import ctypes
-from mosaic.engine.utils.vulkan.vulkan_utils.memory import find_memory_type
 
+import ctypes
 import struct
 from ctypes import byref, c_int32, c_void_p, cast, pointer
 from dataclasses import dataclass
@@ -14,6 +13,11 @@ import vulkan_py as vk
 
 from mosaic.engine.renderer.vulkan_renderer.vulkan_render_stage import RenderStage
 from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
+from mosaic.engine.utils.vulkan.vulkan_utils.memory import (
+    copy_buffer,
+    create_buffer,
+    load_data_to_buffer,
+)
 from mosaic.engine.utils.vulkan.vulkan_utils.shader import load_shader_module
 from mosaic.engine.utils.vulkan.vulkan_utils.transition_image_layout import transition_image_layout
 
@@ -37,15 +41,19 @@ class TrianglePass(RenderStage):
     _framebuffers: list[vk.VkFramebuffer]
     _viewport: vk.VkViewport
     _scissor: vk.VkRect2D
+    _command_pool: vk.VkCommandPool
 
-    def __init__(self, device: VulkanDevice, swapchain: VulkanSwapchain) -> None:
+    def __init__(
+        self, device: VulkanDevice, swapchain: VulkanSwapchain, command_pool: vk.VkCommandPool
+    ) -> None:
         self._device = device
         self._swapchain = swapchain
+        self._command_pool = command_pool
         self._create_graphics_pipeline()
 
     def record(self, command_buffer: vk.VkCommandBuffer, image_index: int) -> None:
         """Record the triangle draw for one swapchain image."""
-        # Before starting rendering, transition the swapchain image to vk::ImageLayout::eColorAttachmentOptimal
+        # Before starting rendering, transition the swapchain image to ColorAttachmentOptimal
         transition_image_layout(
             device=self._device.device,
             command_buffer=command_buffer,
@@ -186,69 +194,44 @@ class TrianglePass(RenderStage):
             Vertex(glm.vec2(-0.5, 0.5), glm.vec3(0.0, 0.0, 1.0)),
         ]
 
+        # pack the vertices in a byte configuration that is useful by the GPU
         packed_vertices = b"".join(
             struct.pack("<5f", *vertex.pos, *vertex.color) for vertex in vertices
         )
 
-        buffer_info = vk.VkBufferCreateInfo(
+        # create a temporary staging buffer with memory that is visibile by the CPU
+        (staging_buffer, staging_buffer_memory) = create_buffer(
+            data_length=len(packed_vertices),
+            device=self._device,
+            usage=vk.VkBufferUsageFlagBits.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            properties=vk.VkMemoryPropertyFlagBits.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+            | vk.VkMemoryPropertyFlagBits.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        )
+
+        # load the data to the staging buffer CPU wise
+        load_data_to_buffer(packed_vertices, self._device, staging_buffer_memory)
+
+        # create the vertex buffer that is optimized for the GPU and invisible by the CPU
+        (self._vertex_buffer, self._vertex_buffer_memory) = create_buffer(
+            data_length=len(packed_vertices),
+            device=self._device,
+            usage=vk.VkBufferUsageFlagBits.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
+            | vk.VkBufferUsageFlagBits.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            properties=vk.VkMemoryPropertyFlagBits.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        )
+
+        # copy the data from the CPU buffer to the GPU buffer
+        copy_buffer(
+            source=staging_buffer,
+            destination=self._vertex_buffer,
             size=len(packed_vertices),
-            usage=vk.VkBufferUsageFlagBits.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            sharingMode=vk.VkSharingMode.VK_SHARING_MODE_EXCLUSIVE,
+            device=self._device,
+            command_pool=self._command_pool,
         )
 
-        self._vertex_buffer = vk.VkBuffer()
-        check(
-            self._device.device.vkCreateBuffer(buffer_info, None, byref(self._vertex_buffer)),
-            "vkCreateBuffer",
-        )
-
-        memory_requirements = vk.VkMemoryRequirements()
-
-        self._device.device.vkGetBufferMemoryRequirements(self._vertex_buffer, byref(memory_requirements))
-
-        memory_properties = self._device.memory_properties
-
-        memory_allocate_info = vk.VkMemoryAllocateInfo(
-            allocationSize=memory_requirements.size,
-            memoryTypeIndex=find_memory_type(
-                type_filter=memory_requirements.memoryTypeBits,
-                properties=vk.VkMemoryPropertyFlagBits.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
-                | vk.VkMemoryPropertyFlagBits.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                memory_properties=memory_properties,
-            ),
-        )
-
-        self._vertex_buffer_memory = vk.VkDeviceMemory()
-        check(
-            self._device.device.vkAllocateMemory(
-                memory_allocate_info,
-                None,
-                byref(self._vertex_buffer_memory),
-            ),
-            "vkAllocateMemory",
-        )
-
-        check(
-            self._device.device.vkBindBufferMemory(
-                self._vertex_buffer,
-                self._vertex_buffer_memory,
-                0,
-            ),
-            "vkBindBufferMemory",
-        )
-
-        mapped = c_void_p()
-        size = len(packed_vertices)
-
-        check(
-            self._device.device.vkMapMemory(
-                self._vertex_buffer_memory, 0, size, 0, byref(mapped)
-            ),
-            "vkMapMemory",
-        )
-
-        ctypes.memmove(mapped, packed_vertices, size)
-        self._device.device.vkUnmapMemory(self._vertex_buffer_memory)
+        # destroy the temporary staging buffer
+        self._device.device.vkDestroyBuffer(staging_buffer, None)
+        self._device.device.vkFreeMemory(staging_buffer_memory, None)
 
         binding = vk.VkVertexInputBindingDescription(
             binding=0,  # define the binding position

@@ -22,10 +22,12 @@ class VulkanRenderer(RenderDriver):
 
     def __init__(self, backend: VulkanBackend) -> None:
         self._backend = backend
-        self._passes: list[RenderStage] = [TrianglePass(backend.device, backend.swapchain)]
         self._command_pool = VulkanCommandPool(
             backend.device, len(backend.swapchain.swapchain_images)
         )
+        self._passes: list[RenderStage] = [
+            TrianglePass(backend.device, backend.swapchain, self._command_pool.command_pool)
+        ]
         self._record_command_buffers()
 
     def run(self) -> None:
@@ -69,9 +71,13 @@ class VulkanRenderer(RenderDriver):
             render_stage.close()
 
         self._backend.recreate_swapchain()
-        self._passes = [TrianglePass(self._backend.device, self._backend.swapchain)]
         self._command_pool = VulkanCommandPool(
             self._backend.device, len(self._backend.swapchain.swapchain_images)
         )
+        self._passes = [
+            TrianglePass(
+                self._backend.device, self._backend.swapchain, self._command_pool.command_pool
+            )
+        ]
 
         self._record_command_buffers()
