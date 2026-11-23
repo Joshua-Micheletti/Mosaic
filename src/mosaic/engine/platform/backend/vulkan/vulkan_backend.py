@@ -1,6 +1,9 @@
+"""Vulkan Backend Module."""
+
 import ctypes
 from ctypes import byref, c_uint32, pointer
 from enum import IntEnum
+from typing import TYPE_CHECKING
 
 import vulkan_py as vk
 
@@ -8,14 +11,18 @@ from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice
 from mosaic.engine.platform.backend.vulkan.vulkan_frame_sync import VulkanFrameSync
 from mosaic.engine.platform.backend.vulkan.vulkan_surface import VulkanSurface
 from mosaic.engine.platform.backend.vulkan.vulkan_swapchain import VulkanSwapchain
-from mosaic.engine.platform.window.window import Window
 from mosaic.engine.utils.lifecycle.closable import Closable
-from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
+from mosaic.engine.utils.vulkan.debug import check
+
+if TYPE_CHECKING:
+    from mosaic.engine.platform.window.window import Window
 
 UINT64_MAX = 0xFFFFFFFFFFFFFFFF
 
 
 class DrawFrameStatus(IntEnum):
+    """Enumerator for the returning status of the rendering step."""
+
     OK = 0
     RECREATE_SWAPCHAIN = 1
 
@@ -150,4 +157,11 @@ class VulkanBackend(Closable):
         self._frame_sync = VulkanFrameSync(self._device, self._swapchain)
 
     def wait_for_framebuffer(self) -> bool:
+        """
+        Wrapper for the window wait for framebuffer helper.
+
+        Returns:
+            bool: true when the framebuffer is available
+
+        """
         return self._window.wait_for_framebuffer()

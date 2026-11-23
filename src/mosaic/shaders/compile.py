@@ -29,13 +29,16 @@ def main() -> None:
         elif extension == "frag":
             stage = "fragment"
         else:
-            error = f"Cannot determine shader stage from {source.name}; expected a .vert.slang or .frag.slang filename"
+            error = (
+                f"Cannot determine shader stage from {source.name};"
+                "expected a .vert.slang or .frag.slang filename"
+            )
             raise ValueError(error)
         shaders.append((source, source.with_suffix(".spv"), stage))
 
     # call slangc to compile each shader
     for source, output, stage in shaders:
-        subprocess.run(
+        subprocess.run(  # noqa: S603
             [
                 compiler,
                 str(source),

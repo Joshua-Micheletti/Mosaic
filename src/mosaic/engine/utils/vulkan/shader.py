@@ -1,10 +1,11 @@
 """Vulkan Shader Utils Module."""
 
 from ctypes import Array, byref, c_uint32
+from pathlib import Path
 
 import vulkan_py as vk
 
-from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
+from mosaic.engine.utils.vulkan.debug import check
 
 
 def load_shader_module(device: vk.Device, path: str) -> vk.VkShaderModule:
@@ -19,7 +20,7 @@ def load_shader_module(device: vk.Device, path: str) -> vk.VkShaderModule:
         vk.VkShaderModule: The created shader module.
 
     """
-    with open(path, "rb") as shader_file:
+    with Path(path).open("rb") as shader_file:
         code = shader_file.read()
     word_count = len(code) // 4
     buffer: Array[c_uint32] = (c_uint32 * word_count).from_buffer_copy(code)

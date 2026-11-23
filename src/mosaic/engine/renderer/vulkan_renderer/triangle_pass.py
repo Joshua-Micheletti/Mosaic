@@ -12,12 +12,15 @@ import glm
 import vulkan_py as vk
 
 from mosaic.engine.renderer.vulkan_renderer.vulkan_render_stage import RenderStage
-from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
-from mosaic.engine.utils.vulkan.vulkan_utils.memory import (
+from mosaic.engine.utils.vulkan.debug import check
+from mosaic.engine.utils.vulkan.memory import (
     create_and_fill_gpu_buffer,
 )
-from mosaic.engine.utils.vulkan.vulkan_utils.shader import load_shader_module
-from mosaic.engine.utils.vulkan.vulkan_utils.transition_image_layout import transition_image_layout
+from mosaic.engine.utils.vulkan.shader import load_shader_module
+from mosaic.engine.utils.vulkan.transition_image_layout import (
+    ImageLayoutTransition,
+    transition_image_layout,
+)
 
 if TYPE_CHECKING:
     from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice
@@ -26,6 +29,8 @@ if TYPE_CHECKING:
 
 @dataclass
 class Vertex:
+    """Vertex dataclass."""
+
     pos: glm.vec2
     color: glm.vec3
 
@@ -56,12 +61,14 @@ class TrianglePass(RenderStage):
             device=self._device.device,
             command_buffer=command_buffer,
             image=self._swapchain.swapchain_images[image_index],
-            old_layout=vk.VkImageLayout.VK_IMAGE_LAYOUT_UNDEFINED,
-            new_layout=vk.VkImageLayout.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            src_access_mask=vk.VkAccessFlagBits2.VK_ACCESS_2_NONE,
-            dst_access_mask=vk.VkAccessFlagBits2.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-            src_stage_mask=vk.VkPipelineStageFlagBits2.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            dst_stage_mask=vk.VkPipelineStageFlagBits2.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            transition=ImageLayoutTransition(
+                old_layout=vk.VkImageLayout.VK_IMAGE_LAYOUT_UNDEFINED,
+                new_layout=vk.VkImageLayout.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                src_access_mask=vk.VkAccessFlagBits2.VK_ACCESS_2_NONE,
+                dst_access_mask=vk.VkAccessFlagBits2.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                src_stage_mask=vk.VkPipelineStageFlagBits2.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                dst_stage_mask=vk.VkPipelineStageFlagBits2.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            ),
         )
 
         clear_value = vk.VkClearValue(color=vk.VkClearColorValue(float32=(0.01, 0.01, 0.02, 1.0)))
@@ -129,21 +136,26 @@ class TrianglePass(RenderStage):
             device=self._device.device,
             command_buffer=command_buffer,
             image=self._swapchain.swapchain_images[image_index],
-            old_layout=vk.VkImageLayout.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            new_layout=vk.VkImageLayout.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-            src_access_mask=vk.VkAccessFlagBits2.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-            dst_access_mask=vk.VkAccessFlagBits2.VK_ACCESS_2_NONE,
-            src_stage_mask=vk.VkPipelineStageFlagBits2.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            dst_stage_mask=vk.VkPipelineStageFlagBits2.VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+            transition=ImageLayoutTransition(
+                old_layout=vk.VkImageLayout.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                new_layout=vk.VkImageLayout.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                src_access_mask=vk.VkAccessFlagBits2.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                dst_access_mask=vk.VkAccessFlagBits2.VK_ACCESS_2_NONE,
+                src_stage_mask=vk.VkPipelineStageFlagBits2.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                dst_stage_mask=vk.VkPipelineStageFlagBits2.VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+            ),
         )
 
+    @override
     def resize(self, width: int = 0, height: int = 0) -> None:
         """
         Resize the triangle pass.
 
         Args:
-            width (int, optional): Width of the rendering area. If left at 0, the swapchain extent is used.
-            height (int, optional): Height of the rendering area. If left at 0, the swapchain extent is used.
+            width (int, optional): Width of the rendering area.
+                                   If left at 0, the swapchain extent is used.
+            height (int, optional): Height of the rendering area.
+                                    If left at 0, the swapchain extent is used.
 
         """
         # define the viewport, which represents the area of the framebuffer to render to
@@ -289,8 +301,10 @@ class TrianglePass(RenderStage):
 
         # define the rasterizer, which converts the vertices into fragments
         rasterizer = vk.VkPipelineRasterizationStateCreateInfo(
-            polygonMode=vk.VkPolygonMode.VK_POLYGON_MODE_FILL,  # define how the fragments are generated from the vertices
-            depthClampEnable=vk.VK_FALSE,  # clamp the depth values instead of discarding fragments outside the near/far planes
+            # define how the fragments are generated from the vertices
+            polygonMode=vk.VkPolygonMode.VK_POLYGON_MODE_FILL,
+            # clamp the depth values instead of discarding fragments outside the near/far planes
+            depthClampEnable=vk.VK_FALSE,
             rasterizerDiscardEnable=vk.VK_FALSE,
             cullMode=vk.VkCullModeFlagBits.VK_CULL_MODE_BACK_BIT,
             frontFace=vk.VkFrontFace.VK_FRONT_FACE_CLOCKWISE,
@@ -298,7 +312,8 @@ class TrianglePass(RenderStage):
             lineWidth=1.0,
         )
 
-        # configure the pipeline to enable hardware multisampling, which can help reduce aliasing artifacts
+        # configure the pipeline to enable hardware multisampling,
+        # which can help reduce aliasing artifacts
         multisample = vk.VkPipelineMultisampleStateCreateInfo(
             rasterizationSamples=vk.VkSampleCountFlagBits.VK_SAMPLE_COUNT_1_BIT
         )

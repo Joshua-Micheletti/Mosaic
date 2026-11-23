@@ -6,12 +6,13 @@ from typing import TYPE_CHECKING
 import glfw
 import vulkan_py as vk
 
-from mosaic.engine.platform.window.window import Window
 from mosaic.engine.utils.lifecycle.closable import Closable
-from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
+from mosaic.engine.utils.vulkan.debug import check
 
 if TYPE_CHECKING:
     from ty_extensions._internal import Unknown
+
+    from mosaic.engine.platform.window.window import Window
 
 
 class VulkanSurface(Closable):
@@ -96,16 +97,19 @@ class VulkanSurface(Closable):
         # will crash the next time a validation message fires.
         self._debug_callback_fn = vk.PFN_vkDebugUtilsMessengerCallbackEXT(self._debug_callback)
 
+        severity_flags = vk.VkDebugUtilsMessageSeverityFlagBitsEXT
+        message_flags = vk.VkDebugUtilsMessageTypeFlagBitsEXT
+
         create_info = vk.VkDebugUtilsMessengerCreateInfoEXT(
             messageSeverity=(
-                vk.VkDebugUtilsMessageSeverityFlagBitsEXT.VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT
-                | vk.VkDebugUtilsMessageSeverityFlagBitsEXT.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
-                | vk.VkDebugUtilsMessageSeverityFlagBitsEXT.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
+                severity_flags.VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT
+                | severity_flags.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
+                | severity_flags.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
             ),
             messageType=(
-                vk.VkDebugUtilsMessageTypeFlagBitsEXT.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT
-                | vk.VkDebugUtilsMessageTypeFlagBitsEXT.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
-                | vk.VkDebugUtilsMessageTypeFlagBitsEXT.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT
+                message_flags.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT
+                | message_flags.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
+                | message_flags.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT
             ),
             pfnUserCallback=self._debug_callback_fn,
         )
@@ -131,15 +135,11 @@ class VulkanSurface(Closable):
         data = callback_data_ptr.contents
         message = data.pMessage.decode(errors="ignore") if data.pMessage else "<no message>"
 
-        if (
-            severity
-            >= vk.VkDebugUtilsMessageSeverityFlagBitsEXT.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
-        ):
+        severity_flags = vk.VkDebugUtilsMessageSeverityFlagBitsEXT
+
+        if severity >= severity_flags.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT:
             tag = "ERROR"
-        elif (
-            severity
-            >= vk.VkDebugUtilsMessageSeverityFlagBitsEXT.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
-        ):
+        elif severity >= severity_flags.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT:
             tag = "WARN"
         else:
             tag = "INFO"

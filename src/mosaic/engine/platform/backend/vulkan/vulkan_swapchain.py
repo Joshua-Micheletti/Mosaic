@@ -1,3 +1,5 @@
+"""Vulkan Swapchain Module."""
+
 import ctypes
 from ctypes import byref, c_uint32
 from typing import TYPE_CHECKING, Any
@@ -5,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 import vulkan_py as vk
 
 from mosaic.engine.utils.lifecycle.closable import Closable
-from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
+from mosaic.engine.utils.vulkan.debug import check
 
 if TYPE_CHECKING:
     from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice
@@ -22,8 +24,8 @@ class VulkanSwapchain(Closable):
     """
 
     _swapchain: vk.VkSwapchainKHR
-    _swapchain_format: Any
-    _swapchain_extent: Any | vk.VkExtent2D
+    _swapchain_format: vk.VkFormat
+    _swapchain_extent: vk.VkExtent2D
     _swapchain_images: list[Any]
     _swapchain_image_views: list[vk.VkImageView]
     _device: VulkanDevice
@@ -33,11 +35,11 @@ class VulkanSwapchain(Closable):
         return self._swapchain
 
     @property
-    def swapchain_format(self) -> Any:
+    def swapchain_format(self) -> vk.VkFormat:
         return self._swapchain_format
 
     @property
-    def swapchain_extent(self) -> Any | vk.VkExtent2D:
+    def swapchain_extent(self) -> vk.VkExtent2D:
         return self._swapchain_extent
 
     @property
@@ -69,6 +71,8 @@ class VulkanSwapchain(Closable):
         Create the vulkan swapchain object.
 
         Args:
+            width (int): Width.
+            height (int): Height.
             window (_Pointer[glfw._GLFWwindow]): GLFW window pointer.
             device (VulkanDevice): Vulkan device.
             surface (VulkanSurface): Vulkan surface.
@@ -92,7 +96,7 @@ class VulkanSwapchain(Closable):
         )
 
         # choose the first format available by default
-        chosen_format = formats[0]
+        chosen_format: vk.VkSurfaceFormatKHR = formats[0]
         # choose a better format if available
         # in this case, B8G8R8A8_UNORM with SRGB nonlinear colorspace
         for f in formats:
@@ -100,7 +104,7 @@ class VulkanSwapchain(Closable):
                 f.format == vk.VkFormat.VK_FORMAT_B8G8R8A8_UNORM
                 and f.colorSpace == vk.VkColorSpaceKHR.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
             ):
-                chosen_format = f
+                chosen_format: vk.VkSurfaceFormatKHR = f
                 break
 
         # extract the present modes supported by the surface.
@@ -123,9 +127,9 @@ class VulkanSwapchain(Closable):
 
         # if the extent is valid, use it, otherwise, use the window size as the extent.
         if caps.currentExtent.width != INVALID_EXTENT_SIZE:
-            extent = caps.currentExtent
+            extent: vk.VkExtent2D = caps.currentExtent
         else:
-            extent = vk.VkExtent2D(width=width, height=height)
+            extent: vk.VkExtent2D = vk.VkExtent2D(width=width, height=height)
 
         # determine the number of images in the swapchain.
         image_count = caps.minImageCount + 1

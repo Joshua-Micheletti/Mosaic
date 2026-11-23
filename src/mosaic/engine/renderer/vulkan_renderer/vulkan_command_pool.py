@@ -1,10 +1,12 @@
+"""Vulkan Command Module."""
+
 from ctypes import byref
 from typing import TYPE_CHECKING
 
 import vulkan_py as vk
 
 from mosaic.engine.utils.lifecycle.closable import Closable
-from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
+from mosaic.engine.utils.vulkan.debug import check
 
 if TYPE_CHECKING:
     from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice

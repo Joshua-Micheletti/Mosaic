@@ -2,12 +2,14 @@
 
 import ctypes
 from ctypes import byref, c_void_p
-from typing import Any
+from typing import TYPE_CHECKING
 
 import vulkan_py as vk
 
-from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice
-from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
+from mosaic.engine.utils.vulkan.debug import check
+
+if TYPE_CHECKING:
+    from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice
 
 
 def find_memory_type(
@@ -27,7 +29,7 @@ def find_memory_type(
 
 
 def create_and_fill_gpu_buffer(
-    data: Any, device: VulkanDevice, usage: int, command_pool: vk.VkCommandPool
+    data: bytes, device: VulkanDevice, usage: int, command_pool: vk.VkCommandPool
 ) -> tuple[vk.VkBuffer, vk.VkDeviceMemory]:
     """
     Create and fill a GPU ready buffer.
@@ -84,6 +86,19 @@ def create_buffer(
     usage: int,
     properties: int,
 ) -> tuple[vk.VkBuffer, vk.VkDeviceMemory]:
+    """
+    Create a buffer with the specified flags.
+
+    Args:
+        data_length (int): Length of the data to allocate the buffer memory
+        device (VulkanDevice): Vulkan Device
+        usage (int): Vulkan buffer usage flags
+        properties (int): Vulkan buffer properties flags
+
+    Returns:
+        tuple[vk.VkBuffer, vk.VkDeviceMemory]: The created buffer and corresponding memory
+
+    """
     buffer_info = vk.VkBufferCreateInfo(
         size=data_length,
         usage=usage,
@@ -136,7 +151,18 @@ def create_buffer(
     return (buffer, buffer_memory)
 
 
-def load_data_to_buffer(data: Any, device: VulkanDevice, buffer_memory: vk.VkDeviceMemory) -> None:
+def load_data_to_buffer(
+    data: bytes, device: VulkanDevice, buffer_memory: vk.VkDeviceMemory
+) -> None:
+    """
+    Load bytes in a CPU visible buffer.
+
+    Args:
+        data (bytes): Data to load
+        device (VulkanDevice): Vulkan device
+        buffer_memory (vk.VkDeviceMemory): Memory area to load the data into
+
+    """
     mapped = c_void_p()
     size = len(data)
 

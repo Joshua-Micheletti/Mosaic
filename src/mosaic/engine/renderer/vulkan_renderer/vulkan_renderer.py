@@ -10,7 +10,7 @@ from mosaic.engine.platform.backend.vulkan.vulkan_backend import DrawFrameStatus
 from mosaic.engine.renderer.render_driver import RenderDriver
 from mosaic.engine.renderer.vulkan_renderer.triangle_pass import TrianglePass
 from mosaic.engine.renderer.vulkan_renderer.vulkan_command_pool import VulkanCommandPool
-from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
+from mosaic.engine.utils.vulkan.debug import check
 
 if TYPE_CHECKING:
     from mosaic.engine.platform.backend.vulkan.vulkan_backend import VulkanBackend

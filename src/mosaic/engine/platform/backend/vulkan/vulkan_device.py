@@ -1,12 +1,16 @@
+"""Vulkan Device Module."""
+
 from ctypes import byref, c_char_p, c_float, c_uint32, c_void_p, cast, pointer
 
 import vulkan_py as vk
 
 from mosaic.engine.utils.lifecycle.closable import Closable
-from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
+from mosaic.engine.utils.vulkan.debug import check
 
 
 class VulkanDevice(Closable):
+    """Vulkan Device Class."""
+
     _physical_device: vk.VkPhysicalDevice
     _raw_device: vk.VkDevice
     _device: vk.Device
