@@ -2,6 +2,7 @@
 
 import ctypes
 from ctypes import byref, c_void_p
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import vulkan_py as vk
@@ -9,7 +10,17 @@ import vulkan_py as vk
 from mosaic.engine.utils.vulkan.debug import check
 
 if TYPE_CHECKING:
+    import glm
+
     from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice
+
+
+@dataclass
+class Vertex:
+    """Vertex dataclass."""
+
+    pos: glm.vec2
+    color: glm.vec3
 
 
 def find_memory_type(

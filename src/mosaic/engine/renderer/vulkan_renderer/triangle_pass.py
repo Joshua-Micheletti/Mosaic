@@ -5,7 +5,6 @@ from __future__ import annotations
 import ctypes
 import struct
 from ctypes import byref, c_int32, c_void_p, cast, pointer
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, override
 
 import glm
@@ -14,6 +13,7 @@ import vulkan_py as vk
 from mosaic.engine.renderer.vulkan_renderer.vulkan_render_stage import RenderStage
 from mosaic.engine.utils.vulkan.debug import check
 from mosaic.engine.utils.vulkan.memory import (
+    Vertex,
     create_and_fill_gpu_buffer,
 )
 from mosaic.engine.utils.vulkan.shader import load_shader_module
@@ -25,14 +25,6 @@ from mosaic.engine.utils.vulkan.transition_image_layout import (
 if TYPE_CHECKING:
     from mosaic.engine.platform.backend.vulkan.vulkan_device import VulkanDevice
     from mosaic.engine.platform.backend.vulkan.vulkan_swapchain import VulkanSwapchain
-
-
-@dataclass
-class Vertex:
-    """Vertex dataclass."""
-
-    pos: glm.vec2
-    color: glm.vec3
 
 
 class TrianglePass(RenderStage):
