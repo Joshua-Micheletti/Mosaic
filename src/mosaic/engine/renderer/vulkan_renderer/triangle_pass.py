@@ -6,7 +6,7 @@ import ctypes
 import struct
 from ctypes import byref, c_int32, c_void_p, cast, pointer
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
 import glm
 import vulkan_py as vk
@@ -14,9 +14,7 @@ import vulkan_py as vk
 from mosaic.engine.renderer.vulkan_renderer.vulkan_render_stage import RenderStage
 from mosaic.engine.utils.vulkan.vulkan_utils.debug import check
 from mosaic.engine.utils.vulkan.vulkan_utils.memory import (
-    copy_buffer,
-    create_buffer,
-    load_data_to_buffer,
+    create_and_fill_gpu_buffer,
 )
 from mosaic.engine.utils.vulkan.vulkan_utils.shader import load_shader_module
 from mosaic.engine.utils.vulkan.vulkan_utils.transition_image_layout import transition_image_layout
@@ -51,8 +49,8 @@ class TrianglePass(RenderStage):
         self._command_pool = command_pool
         self._create_graphics_pipeline()
 
+    @override
     def record(self, command_buffer: vk.VkCommandBuffer, image_index: int) -> None:
-        """Record the triangle draw for one swapchain image."""
         # Before starting rendering, transition the swapchain image to ColorAttachmentOptimal
         transition_image_layout(
             device=self._device.device,
@@ -106,12 +104,24 @@ class TrianglePass(RenderStage):
             offsets,
         )
 
+        self._device.device.vkCmdBindIndexBuffer(
+            command_buffer, self._index_buffer, 0, vk.VkIndexType.VK_INDEX_TYPE_UINT32
+        )
+
         # set the dynamic states for the pipeline
         self._device.device.vkCmdSetViewport(command_buffer, 0, 1, pointer(self._viewport))
         self._device.device.vkCmdSetScissor(command_buffer, 0, 1, pointer(self._scissor))
 
         # draw the triangle (3 vertices, 1 instance, first vertex = 0, first instance = 0)
-        self._device.device.vkCmdDraw(command_buffer, 3, 1, 0, 0)
+        # self._device.device.vkCmdDraw(command_buffer, 3, 1, 0, 0)
+        self._device.device.vkCmdDrawIndexed(
+            command_buffer,
+            6,  # index count
+            1,  # instance count
+            0,  # first index
+            0,  # vertex offset
+            0,  # first instance
+        )
         # finish the rendering commands
         self._device.device.vkCmdEndRendering(command_buffer)
 
@@ -126,8 +136,6 @@ class TrianglePass(RenderStage):
             src_stage_mask=vk.VkPipelineStageFlagBits2.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
             dst_stage_mask=vk.VkPipelineStageFlagBits2.VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
         )
-
-        # self._device.device.vkCmdEnd(command_buffer)
 
     def resize(self, width: int = 0, height: int = 0) -> None:
         """
@@ -160,6 +168,8 @@ class TrianglePass(RenderStage):
         """Release resources owned by this pass."""
         self._device.device.vkDestroyBuffer(self._vertex_buffer, None)
         self._device.device.vkFreeMemory(self._vertex_buffer_memory, None)
+        self._device.device.vkDestroyBuffer(self._index_buffer, None)
+        self._device.device.vkFreeMemory(self._index_buffer_memory, None)
         self._device.device.vkDestroyPipeline(self._pipeline, None)
         self._device.device.vkDestroyPipelineLayout(self._pipeline_layout, None)
 
@@ -189,49 +199,35 @@ class TrianglePass(RenderStage):
 
         # define the variables in the vertex shader and how they are laid out in memory
         vertices = [
-            Vertex(glm.vec2(0.0, -0.5), glm.vec3(1.0, 0.0, 0.0)),
-            Vertex(glm.vec2(0.5, 0.5), glm.vec3(0.0, 1.0, 0.0)),
-            Vertex(glm.vec2(-0.5, 0.5), glm.vec3(0.0, 0.0, 1.0)),
+            Vertex(glm.vec2(-0.5, -0.5), glm.vec3(1.0, 0.0, 0.0)),
+            Vertex(glm.vec2(0.5, -0.5), glm.vec3(0.0, 1.0, 0.0)),
+            Vertex(glm.vec2(0.5, 0.5), glm.vec3(0.0, 0.0, 1.0)),
+            Vertex(glm.vec2(-0.5, 0.5), glm.vec3(1.0, 1.0, 1.0)),
         ]
+
+        indices = [0, 1, 2, 2, 3, 0]
 
         # pack the vertices in a byte configuration that is useful by the GPU
         packed_vertices = b"".join(
             struct.pack("<5f", *vertex.pos, *vertex.color) for vertex in vertices
         )
-
-        # create a temporary staging buffer with memory that is visibile by the CPU
-        (staging_buffer, staging_buffer_memory) = create_buffer(
-            data_length=len(packed_vertices),
-            device=self._device,
-            usage=vk.VkBufferUsageFlagBits.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            properties=vk.VkMemoryPropertyFlagBits.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
-            | vk.VkMemoryPropertyFlagBits.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        )
-
-        # load the data to the staging buffer CPU wise
-        load_data_to_buffer(packed_vertices, self._device, staging_buffer_memory)
+        packed_indices = struct.pack(f"<{len(indices)}I", *indices)
 
         # create the vertex buffer that is optimized for the GPU and invisible by the CPU
-        (self._vertex_buffer, self._vertex_buffer_memory) = create_buffer(
-            data_length=len(packed_vertices),
-            device=self._device,
-            usage=vk.VkBufferUsageFlagBits.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
-            | vk.VkBufferUsageFlagBits.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            properties=vk.VkMemoryPropertyFlagBits.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        (self._vertex_buffer, self._vertex_buffer_memory) = create_and_fill_gpu_buffer(
+            packed_vertices,
+            self._device,
+            vk.VkBufferUsageFlagBits.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            self._command_pool,
         )
 
-        # copy the data from the CPU buffer to the GPU buffer
-        copy_buffer(
-            source=staging_buffer,
-            destination=self._vertex_buffer,
-            size=len(packed_vertices),
-            device=self._device,
-            command_pool=self._command_pool,
+        # create the index buffer that is optimized for the GPU and invisible by the CPU
+        (self._index_buffer, self._index_buffer_memory) = create_and_fill_gpu_buffer(
+            packed_indices,
+            self._device,
+            vk.VkBufferUsageFlagBits.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            self._command_pool,
         )
-
-        # destroy the temporary staging buffer
-        self._device.device.vkDestroyBuffer(staging_buffer, None)
-        self._device.device.vkFreeMemory(staging_buffer_memory, None)
 
         binding = vk.VkVertexInputBindingDescription(
             binding=0,  # define the binding position

@@ -26,6 +26,58 @@ def find_memory_type(
     raise RuntimeError(error)
 
 
+def create_and_fill_gpu_buffer(
+    data: Any, device: VulkanDevice, usage: int, command_pool: vk.VkCommandPool
+) -> tuple[vk.VkBuffer, vk.VkDeviceMemory]:
+    """
+    Create and fill a GPU ready buffer.
+
+    Args:
+        data (Any): Data to load in the buffer
+        device (VulkanDevice): Vulkan device for sending operations
+        usage (int): vk.VkBufferUsageFlagBits enumerator
+        command_pool (vk.VkCommandPool): Command pool to queue the command for copying data
+
+    Returns:
+        tuple[vk.VkBuffer, vk.VkDeviceMemory]: The buffer and memory created
+
+    """
+    # create a temporary staging buffer with memory that is visibile by the CPU
+    (staging_buffer, staging_buffer_memory) = create_buffer(
+        data_length=len(data),
+        device=device,
+        usage=vk.VkBufferUsageFlagBits.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        properties=vk.VkMemoryPropertyFlagBits.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+        | vk.VkMemoryPropertyFlagBits.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+    )
+
+    # load the data to the staging buffer CPU wise
+    load_data_to_buffer(data, device, staging_buffer_memory)
+
+    # create the vertex buffer that is optimized for the GPU and invisible by the CPU
+    (buffer, buffer_memory) = create_buffer(
+        data_length=len(data),
+        device=device,
+        usage=usage | vk.VkBufferUsageFlagBits.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        properties=vk.VkMemoryPropertyFlagBits.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    )
+
+    # copy the data from the CPU buffer to the GPU buffer
+    copy_buffer(
+        source=staging_buffer,
+        destination=buffer,
+        size=len(data),
+        device=device,
+        command_pool=command_pool,
+    )
+
+    # destroy the temporary staging buffer
+    device.device.vkDestroyBuffer(staging_buffer, None)
+    device.device.vkFreeMemory(staging_buffer_memory, None)
+
+    return (buffer, buffer_memory)
+
+
 def create_buffer(
     data_length: int,
     device: VulkanDevice,
