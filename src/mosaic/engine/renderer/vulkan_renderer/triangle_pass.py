@@ -1,20 +1,25 @@
 """Vulkan pass that owns and draws the starter triangle."""
 
 from __future__ import annotations
+from vulkan_py.handles import VkDescriptorSet
+from _ctypes import Array
 
 import ctypes
 import struct
+import time
 from ctypes import byref, c_int32, c_void_p, cast, pointer
-from typing import TYPE_CHECKING, override
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, override
 
-import glm
 import vulkan_py as vk
+from pyglm import glm
 
 from mosaic.engine.renderer.vulkan_renderer.vulkan_render_stage import RenderStage
 from mosaic.engine.utils.vulkan.debug import check
 from mosaic.engine.utils.vulkan.memory import (
     Vertex,
     create_and_fill_gpu_buffer,
+    create_buffer,
 )
 from mosaic.engine.utils.vulkan.shader import load_shader_module
 from mosaic.engine.utils.vulkan.transition_image_layout import (
@@ -27,27 +32,57 @@ if TYPE_CHECKING:
     from mosaic.engine.platform.backend.vulkan.vulkan_swapchain import VulkanSwapchain
 
 
+@dataclass(slots=True)
+class UniformBufferObject:
+    model: glm.mat4
+    view: glm.mat4
+    proj: glm.mat4
+
+    def to_bytes(self) -> bytes:
+        values = (
+            float(matrix[column][row])
+            for matrix in (self.model, self.view, self.proj)
+            for column in range(4)
+            for row in range(4)
+        )
+        return struct.pack("<48f", *values)
+
+
 class TrianglePass(RenderStage):
     """Create the triangle's Vulkan resources and record its draw."""
 
-    _render_pass: vk.VkRenderPass
     _pipeline_layout: vk.VkPipelineLayout
     _pipeline: vk.VkPipeline
-    _framebuffers: list[vk.VkFramebuffer]
     _viewport: vk.VkViewport
     _scissor: vk.VkRect2D
     _command_pool: vk.VkCommandPool
+    _uniform_buffers: list[vk.VkBuffer]
+    _uniform_buffers_memory: list[vk.VkDeviceMemory]
+    _uniform_buffers_mapped: list[Any]
+    _start_time: float
+    _descriptor_pool: vk.VkDescriptorPool
+    _descriptor_set_layout: vk.VkDescriptorSetLayout
 
     def __init__(
-        self, device: VulkanDevice, swapchain: VulkanSwapchain, command_pool: vk.VkCommandPool
+        self,
+        device: VulkanDevice,
+        swapchain: VulkanSwapchain,
+        command_pool: vk.VkCommandPool,
+        max_frames_in_flight: int = 2,
     ) -> None:
+        self._start_time = time.perf_counter()
+
         self._device = device
         self._swapchain = swapchain
         self._command_pool = command_pool
+        self._create_descriptor_set_layout()
         self._create_graphics_pipeline()
+        self._create_uniform_buffers(max_frames_in_flight)
+        self._create_descriptor_pool(max_frames_in_flight)
+        self._create_descriptor_sets(max_frames_in_flight)
 
     @override
-    def record(self, command_buffer: vk.VkCommandBuffer, image_index: int) -> None:
+    def record(self, command_buffer: vk.VkCommandBuffer, image_index: int, frame_index: int = 0) -> None:
         # Before starting rendering, transition the swapchain image to ColorAttachmentOptimal
         transition_image_layout(
             device=self._device.device,
@@ -111,6 +146,21 @@ class TrianglePass(RenderStage):
         self._device.device.vkCmdSetViewport(command_buffer, 0, 1, pointer(self._viewport))
         self._device.device.vkCmdSetScissor(command_buffer, 0, 1, pointer(self._scissor))
 
+        descriptor_sets: Array[VkDescriptorSet] = (vk.VkDescriptorSet * 1)(
+            self._descriptor_sets[frame_index]
+        )
+
+        self._device.device.vkCmdBindDescriptorSets(
+            command_buffer,
+            vk.VkPipelineBindPoint.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            self._pipeline_layout,
+            0,  # firstSet
+            1,  # descriptorSetCount
+            descriptor_sets,
+            0,  # dynamicOffsetCount
+            None,  # pDynamicOffsets
+        )
+
         # draw the triangle (3 vertices, 1 instance, first vertex = 0, first instance = 0)
         # self._device.device.vkCmdDraw(command_buffer, 3, 1, 0, 0)
         self._device.device.vkCmdDrawIndexed(
@@ -139,6 +189,26 @@ class TrianglePass(RenderStage):
         )
 
     @override
+    def update(self, frame_index: int) -> None:
+        elapsed_seconds = time.perf_counter() - self._start_time
+
+        ubo = UniformBufferObject(
+            model=glm.rotate(
+                glm.mat4(1.0), elapsed_seconds * glm.radians(90.0), glm.vec3(0.0, 0.0, 1.0)
+            ),
+            view=glm.lookAt(
+                glm.vec3(2.0, 2.0, 2.0),
+                glm.vec3(0.0, 0.0, 0.0),
+                glm.vec3(0.0, 0.0, 1.0),
+            ),
+            proj=glm.perspective(glm.radians(45.0), 1280 / 720, 0.1, 10.0),
+        )
+
+        packed_ubo = ubo.to_bytes()
+
+        ctypes.memmove(self._uniform_buffers_mapped[frame_index], packed_ubo, len(packed_ubo))
+
+    @override
     def resize(self, width: int = 0, height: int = 0) -> None:
         """
         Resize the triangle pass.
@@ -151,11 +221,12 @@ class TrianglePass(RenderStage):
 
         """
         # define the viewport, which represents the area of the framebuffer to render to
+        # height is flipped to account for glm opengl convention
         self._viewport = vk.VkViewport(
             x=0.0,
-            y=0.0,
+            y=float(self._swapchain.swapchain_extent.height if height == 0 else height),
             width=float(self._swapchain.swapchain_extent.width if width == 0 else width),
-            height=float(self._swapchain.swapchain_extent.height if height == 0 else height),
+            height=-float(self._swapchain.swapchain_extent.height if height == 0 else height),
             minDepth=0.0,
             maxDepth=1.0,
         )
@@ -168,6 +239,7 @@ class TrianglePass(RenderStage):
             ),
         )
 
+    @override
     def close(self) -> None:
         """Release resources owned by this pass."""
         self._device.device.vkDestroyBuffer(self._vertex_buffer, None)
@@ -176,6 +248,30 @@ class TrianglePass(RenderStage):
         self._device.device.vkFreeMemory(self._index_buffer_memory, None)
         self._device.device.vkDestroyPipeline(self._pipeline, None)
         self._device.device.vkDestroyPipelineLayout(self._pipeline_layout, None)
+        self._device.device.vkDestroyDescriptorPool(self._descriptor_pool, None)
+
+    def _create_descriptor_set_layout(self) -> None:
+        ubo_layout_binding = vk.VkDescriptorSetLayoutBinding(
+            binding=0,
+            descriptorType=vk.VkDescriptorType.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            descriptorCount=1,
+            stageFlags=vk.VkShaderStageFlagBits.VK_SHADER_STAGE_VERTEX_BIT,
+        )
+
+        ubo_layout_info = vk.VkDescriptorSetLayoutCreateInfo(
+            bindingCount=1, pBindings=pointer(ubo_layout_binding)
+        )
+
+        descriptor_set_layout = vk.VkDescriptorSetLayout()
+        check(
+            self._device.device.vkCreateDescriptorSetLayout(
+                ubo_layout_info,
+                None,
+                byref(descriptor_set_layout),
+            ),
+            "vkCreateDescriptorSetLayout",
+        )
+        self._descriptor_set_layout = descriptor_set_layout
 
     def _create_graphics_pipeline(self) -> None:
         # load the shaders
@@ -264,11 +360,12 @@ class TrianglePass(RenderStage):
             topology=vk.VkPrimitiveTopology.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
         )
         # define the viewport, which represents the area of the framebuffer to render to
+        # height is flipped to account for opengl convention
         self._viewport = vk.VkViewport(
             x=0.0,
-            y=0.0,
+            y=float(self._swapchain.swapchain_extent.height),
             width=float(self._swapchain.swapchain_extent.width),
-            height=float(self._swapchain.swapchain_extent.height),
+            height=-float(self._swapchain.swapchain_extent.height),
             minDepth=0.0,
             maxDepth=1.0,
         )
@@ -326,10 +423,16 @@ class TrianglePass(RenderStage):
         # create the pipeline layout,
         # which defines the interface between the shader stages and the application
         # (uniforms)
+        pipeline_layout_info = vk.VkPipelineLayoutCreateInfo(
+            setLayoutCount=1,
+            pSetLayouts=pointer(self._descriptor_set_layout),
+            pushConstantRangeCount=0,
+        )
+
         pipeline_layout = vk.VkPipelineLayout()
         check(
             self._device.device.vkCreatePipelineLayout(
-                vk.VkPipelineLayoutCreateInfo(setLayoutCount=0, pushConstantRangeCount=0),
+                pipeline_layout_info,
                 None,
                 byref(pipeline_layout),
             ),
@@ -372,3 +475,112 @@ class TrianglePass(RenderStage):
 
         self._device.device.vkDestroyShaderModule(vert_module, None)
         self._device.device.vkDestroyShaderModule(frag_module, None)
+
+    def _create_uniform_buffers(self, max_frames_in_flight: int) -> None:
+        sample_ubo = UniformBufferObject(
+            model=glm.mat4(1.0),
+            view=glm.mat4(1.0),
+            proj=glm.mat4(1.0),
+        )
+
+        size = len(sample_ubo.to_bytes())
+
+        self._uniform_buffers = []
+        self._uniform_buffers_memory = []
+        self._uniform_buffers_mapped = []
+
+        for _ in range(max_frames_in_flight):
+            (buffer, buffer_memory) = create_buffer(
+                data_length=size,
+                device=self._device,
+                usage=vk.VkBufferUsageFlagBits.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                properties=(
+                    vk.VkMemoryPropertyFlagBits.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                    | vk.VkMemoryPropertyFlagBits.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+                ),
+            )
+
+            # mapping the memory before hand to not have to do it each cycle
+            mapped = ctypes.c_void_p()
+
+            check(
+                result=self._device.device.vkMapMemory(
+                    buffer_memory,
+                    0,
+                    size,
+                    0,
+                    ctypes.byref(mapped),
+                ),
+                op="vkMapMemory",
+            )
+
+            self._uniform_buffers.append(buffer)
+            self._uniform_buffers_memory.append(buffer_memory)
+            self._uniform_buffers_mapped.append(mapped)
+
+    def _create_descriptor_pool(self, max_frames_in_flight: int) -> None:
+        pool_size = vk.VkDescriptorPoolSize(
+            type=vk.VkDescriptorType.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            descriptorCount=max_frames_in_flight,
+        )
+
+        pool_info = vk.VkDescriptorPoolCreateInfo(
+            flags=vk.VkDescriptorPoolCreateFlagBits.VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+            maxSets=max_frames_in_flight,
+            poolSizeCount=1,
+            pPoolSizes=pointer(pool_size),
+        )
+
+        self._descriptor_pool = vk.VkDescriptorPool()
+        check(
+            self._device.device.vkCreateDescriptorPool(
+                pool_info,
+                None,
+                byref(self._descriptor_pool),
+            ),
+            "vkCreateDescriptorPool",
+        )
+
+    def _create_descriptor_sets(self, max_frames_in_flight: int) -> None:
+        layouts: Array[vk.VkDescriptorSetLayout] = (
+            vk.VkDescriptorSetLayout * max_frames_in_flight
+        )(*([self._descriptor_set_layout] * max_frames_in_flight))
+
+        alloc_info = vk.VkDescriptorSetAllocateInfo(
+            descriptorPool=self._descriptor_pool,
+            descriptorSetCount=max_frames_in_flight,
+            pSetLayouts=layouts,
+        )
+
+        descriptor_sets: Array[vk.VkDescriptorSet] = (vk.VkDescriptorSet * max_frames_in_flight)()
+        check(
+            result=self._device.device.vkAllocateDescriptorSets(alloc_info, descriptor_sets),
+            op="vkAllocateDescriptorSets",
+        )
+
+        self._descriptor_sets = list(descriptor_sets)
+
+        for i in range(max_frames_in_flight):
+            buffer_info = vk.VkDescriptorBufferInfo(
+                buffer=self._uniform_buffers[i],
+                offset=0,
+                range=len(
+                    UniformBufferObject(glm.mat4(1.0), glm.mat4(1.0), glm.mat4(1.0)).to_bytes()
+                ),
+            )
+
+            descriptor_write = vk.VkWriteDescriptorSet(
+                dstSet=self._descriptor_sets[i],
+                dstBinding=0,
+                dstArrayElement = 0,
+                descriptorCount = 1,
+                descriptorType  = vk.VkDescriptorType.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                pBufferInfo= pointer(buffer_info)
+            )
+
+            self._device.device.vkUpdateDescriptorSets(
+                1,
+                pointer(descriptor_write),
+                0,
+                None,
+            )

@@ -3,6 +3,7 @@ struct VertexOutput {
     float3 color;
 };
 
+
 [shader("fragment")]
 float4 main(VertexOutput inVert) : SV_Target
 {

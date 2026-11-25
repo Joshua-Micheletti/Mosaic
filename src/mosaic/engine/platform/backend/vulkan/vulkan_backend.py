@@ -3,7 +3,7 @@
 import ctypes
 from ctypes import byref, c_uint32, pointer
 from enum import IntEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import vulkan_py as vk
 
@@ -19,7 +19,6 @@ if TYPE_CHECKING:
 
 UINT64_MAX = 0xFFFFFFFFFFFFFFFF
 
-
 class DrawFrameStatus(IntEnum):
     """Enumerator for the returning status of the rendering step."""
 
@@ -33,6 +32,7 @@ class VulkanBackend(Closable):
     _device: VulkanDevice
     _surface: VulkanSurface
     _window: Window
+    _MAX_FRAMES_IN_FLIGHT: int
 
     @property
     def device(self) -> VulkanDevice:
@@ -46,12 +46,18 @@ class VulkanBackend(Closable):
     def swapchain(self) -> VulkanSwapchain:
         return self._swapchain
 
+    @property
+    def MAX_FRAMES_IN_FLIGHT(self) -> int:
+        return self._MAX_FRAMES_IN_FLIGHT 
+
     def __init__(self, window: Window) -> None:
+        self._MAX_FRAMES_IN_FLIGHT = 2
+
         self._window = window
         self._surface = VulkanSurface(window)
         self._device = VulkanDevice(self._surface.instance, self._surface.surface)
         self._swapchain = VulkanSwapchain(window.width, window.height, self._device, self._surface)
-        self._frame_sync = VulkanFrameSync(self._device, self._swapchain)
+        self._frame_sync = VulkanFrameSync(self._device, self._swapchain, self._MAX_FRAMES_IN_FLIGHT)
         # https://github.com/StormMGamming41/vulkan-py/blob/main/examples/hello_triangle.py#L21
 
     def close(self) -> None:
@@ -66,7 +72,7 @@ class VulkanBackend(Closable):
         """Wait for all device work to finish."""
         check(self._device.device.vkDeviceWaitIdle(), "vkDeviceWaitIdle")
 
-    def draw_frame(self, command_buffers: list[vk.VkCommandBuffer]) -> DrawFrameStatus:
+    def draw_frame(self, command_buffers: list[vk.VkCommandBuffer], update_frame: Callable[[int], None]) -> DrawFrameStatus:
         """Acquire, submit, and present a frame using renderer-recorded commands."""
         frame = self._frame_sync.current_frame
         fence = self._frame_sync.in_flight_fences[frame]
@@ -105,6 +111,8 @@ class VulkanBackend(Closable):
         )
         # pick the command buffer to bind and execute
         cmd_buffers = (vk.VkCommandBuffer * 1)(command_buffers[image_index.value])
+
+        update_frame(frame)
 
         # compile the submit info with the synchronization steps and the command buffer to execute
         submit_info = vk.VkSubmitInfo(
@@ -165,3 +173,5 @@ class VulkanBackend(Closable):
 
         """
         return self._window.wait_for_framebuffer()
+
+

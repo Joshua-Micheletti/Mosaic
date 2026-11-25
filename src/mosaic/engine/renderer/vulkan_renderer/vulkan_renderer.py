@@ -26,40 +26,30 @@ class VulkanRenderer(RenderDriver):
             backend.device, len(backend.swapchain.swapchain_images)
         )
         self._passes: list[RenderStage] = [
-            TrianglePass(backend.device, backend.swapchain, self._command_pool.command_pool)
+            TrianglePass(
+                backend.device,
+                backend.swapchain,
+                self._command_pool.command_pool,
+                self._backend.MAX_FRAMES_IN_FLIGHT,
+            )
         ]
         self._record_command_buffers()
 
+    @override
     def run(self) -> None:
         """Render and present one frame."""
-        result = self._backend.draw_frame(self._command_pool.command_buffers)
+        result = self._backend.draw_frame(self._command_pool.command_buffers, self._update_render_stages)
 
         if result == DrawFrameStatus.RECREATE_SWAPCHAIN:
             self.resize()
 
+    @override
     def close(self) -> None:
         """Release renderer resources while the Vulkan device is alive."""
         self._backend.wait_idle()
         self._command_pool.close()
         for render_stage in reversed(self._passes):
             render_stage.close()
-
-    def _record_command_buffers(self) -> None:
-        for image_index, command_buffer in enumerate(self._command_pool.command_buffers):
-            check(
-                self._backend.device.device.vkBeginCommandBuffer(
-                    command_buffer, vk.VkCommandBufferBeginInfo()
-                ),
-                "vkBeginCommandBuffer",
-            )
-
-            for render_stage in self._passes:
-                render_stage.record(command_buffer, image_index)
-
-            check(
-                self._backend.device.device.vkEndCommandBuffer(command_buffer),
-                "vkEndCommandBuffer",
-            )
 
     @override
     def resize(self, width: int = 0, height: int = 0) -> None:
@@ -81,3 +71,24 @@ class VulkanRenderer(RenderDriver):
         ]
 
         self._record_command_buffers()
+
+    def _record_command_buffers(self, frame_index: int = 0) -> None:
+        for image_index, command_buffer in enumerate(self._command_pool.command_buffers):
+            check(
+                self._backend.device.device.vkBeginCommandBuffer(
+                    command_buffer, vk.VkCommandBufferBeginInfo()
+                ),
+                "vkBeginCommandBuffer",
+            )
+
+            for render_stage in self._passes:
+                render_stage.record(command_buffer, image_index, frame_index)
+
+            check(
+                self._backend.device.device.vkEndCommandBuffer(command_buffer),
+                "vkEndCommandBuffer",
+            )
+
+    def _update_render_stages(self, frame_index: int) -> None:
+        for render_pass in self._passes:
+            render_pass.update(frame_index)
