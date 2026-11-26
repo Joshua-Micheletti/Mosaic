@@ -67,8 +67,7 @@ class TrianglePass(RenderStage):
         self,
         device: VulkanDevice,
         swapchain: VulkanSwapchain,
-        command_pool: vk.VkCommandPool,
-        max_frames_in_flight: int = 2,
+        command_pool: vk.VkCommandPool
     ) -> None:
         self._start_time = time.perf_counter()
 
@@ -77,12 +76,14 @@ class TrianglePass(RenderStage):
         self._command_pool = command_pool
         self._create_descriptor_set_layout()
         self._create_graphics_pipeline()
-        self._create_uniform_buffers(max_frames_in_flight)
-        self._create_descriptor_pool(max_frames_in_flight)
-        self._create_descriptor_sets(max_frames_in_flight)
+        self._create_uniform_buffers()
+        self._create_descriptor_pool()
+        self._create_descriptor_sets()
 
     @override
-    def record(self, command_buffer: vk.VkCommandBuffer, image_index: int, frame_index: int = 0) -> None:
+    def record(
+        self, command_buffer: vk.VkCommandBuffer, image_index: int
+    ) -> None:
         # Before starting rendering, transition the swapchain image to ColorAttachmentOptimal
         transition_image_layout(
             device=self._device.device,
@@ -147,7 +148,7 @@ class TrianglePass(RenderStage):
         self._device.device.vkCmdSetScissor(command_buffer, 0, 1, pointer(self._scissor))
 
         descriptor_sets: Array[VkDescriptorSet] = (vk.VkDescriptorSet * 1)(
-            self._descriptor_sets[frame_index]
+            self._descriptor_sets[image_index]
         )
 
         self._device.device.vkCmdBindDescriptorSets(
@@ -396,7 +397,7 @@ class TrianglePass(RenderStage):
             depthClampEnable=vk.VK_FALSE,
             rasterizerDiscardEnable=vk.VK_FALSE,
             cullMode=vk.VkCullModeFlagBits.VK_CULL_MODE_BACK_BIT,
-            frontFace=vk.VkFrontFace.VK_FRONT_FACE_CLOCKWISE,
+            frontFace=vk.VkFrontFace.VK_FRONT_FACE_COUNTER_CLOCKWISE,
             depthBiasEnable=vk.VK_FALSE,
             lineWidth=1.0,
         )
@@ -476,7 +477,7 @@ class TrianglePass(RenderStage):
         self._device.device.vkDestroyShaderModule(vert_module, None)
         self._device.device.vkDestroyShaderModule(frag_module, None)
 
-    def _create_uniform_buffers(self, max_frames_in_flight: int) -> None:
+    def _create_uniform_buffers(self) -> None:
         sample_ubo = UniformBufferObject(
             model=glm.mat4(1.0),
             view=glm.mat4(1.0),
@@ -489,7 +490,7 @@ class TrianglePass(RenderStage):
         self._uniform_buffers_memory = []
         self._uniform_buffers_mapped = []
 
-        for _ in range(max_frames_in_flight):
+        for _ in range(len(self._swapchain.swapchain_images)):
             (buffer, buffer_memory) = create_buffer(
                 data_length=size,
                 device=self._device,
@@ -518,15 +519,15 @@ class TrianglePass(RenderStage):
             self._uniform_buffers_memory.append(buffer_memory)
             self._uniform_buffers_mapped.append(mapped)
 
-    def _create_descriptor_pool(self, max_frames_in_flight: int) -> None:
+    def _create_descriptor_pool(self) -> None:
         pool_size = vk.VkDescriptorPoolSize(
             type=vk.VkDescriptorType.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            descriptorCount=max_frames_in_flight,
+            descriptorCount=len(self._swapchain.swapchain_images),
         )
 
         pool_info = vk.VkDescriptorPoolCreateInfo(
             flags=vk.VkDescriptorPoolCreateFlagBits.VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
-            maxSets=max_frames_in_flight,
+            maxSets=len(self._swapchain.swapchain_images),
             poolSizeCount=1,
             pPoolSizes=pointer(pool_size),
         )
@@ -541,18 +542,20 @@ class TrianglePass(RenderStage):
             "vkCreateDescriptorPool",
         )
 
-    def _create_descriptor_sets(self, max_frames_in_flight: int) -> None:
+    def _create_descriptor_sets(self) -> None:
         layouts: Array[vk.VkDescriptorSetLayout] = (
-            vk.VkDescriptorSetLayout * max_frames_in_flight
-        )(*([self._descriptor_set_layout] * max_frames_in_flight))
+            vk.VkDescriptorSetLayout * len(self._swapchain.swapchain_images)
+        )(*([self._descriptor_set_layout] * len(self._swapchain.swapchain_images)))
 
         alloc_info = vk.VkDescriptorSetAllocateInfo(
             descriptorPool=self._descriptor_pool,
-            descriptorSetCount=max_frames_in_flight,
+            descriptorSetCount=len(self._swapchain.swapchain_images),
             pSetLayouts=layouts,
         )
 
-        descriptor_sets: Array[vk.VkDescriptorSet] = (vk.VkDescriptorSet * max_frames_in_flight)()
+        descriptor_sets: Array[vk.VkDescriptorSet] = (
+            vk.VkDescriptorSet * len(self._swapchain.swapchain_images)
+        )()
         check(
             result=self._device.device.vkAllocateDescriptorSets(alloc_info, descriptor_sets),
             op="vkAllocateDescriptorSets",
@@ -560,7 +563,7 @@ class TrianglePass(RenderStage):
 
         self._descriptor_sets = list(descriptor_sets)
 
-        for i in range(max_frames_in_flight):
+        for i in range(len(self._swapchain.swapchain_images)):
             buffer_info = vk.VkDescriptorBufferInfo(
                 buffer=self._uniform_buffers[i],
                 offset=0,
@@ -572,10 +575,10 @@ class TrianglePass(RenderStage):
             descriptor_write = vk.VkWriteDescriptorSet(
                 dstSet=self._descriptor_sets[i],
                 dstBinding=0,
-                dstArrayElement = 0,
-                descriptorCount = 1,
-                descriptorType  = vk.VkDescriptorType.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                pBufferInfo= pointer(buffer_info)
+                dstArrayElement=0,
+                descriptorCount=1,
+                descriptorType=vk.VkDescriptorType.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                pBufferInfo=pointer(buffer_info),
             )
 
             self._device.device.vkUpdateDescriptorSets(

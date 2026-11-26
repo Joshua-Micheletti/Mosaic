@@ -14,7 +14,7 @@ class RenderStage(Closable, Resizable):
     """A Vulkan render stage that records work into a command buffer."""
 
     @abstractmethod
-    def record(self, command_buffer: vk.VkCommandBuffer, image_index: int, frame_index: int = 0) -> None:
+    def record(self, command_buffer: vk.VkCommandBuffer, image_index: int) -> None:
         """
         Record the render stage.
 

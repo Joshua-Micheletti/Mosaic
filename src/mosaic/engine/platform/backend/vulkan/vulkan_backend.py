@@ -50,6 +50,10 @@ class VulkanBackend(Closable):
     def MAX_FRAMES_IN_FLIGHT(self) -> int:
         return self._MAX_FRAMES_IN_FLIGHT 
 
+    @property
+    def current_frame(self) -> int:
+        return self._frame_sync.current_frame
+
     def __init__(self, window: Window) -> None:
         self._MAX_FRAMES_IN_FLIGHT = 2
 
@@ -97,6 +101,8 @@ class VulkanBackend(Closable):
         if result != vk.VkResult.VK_SUCCESS and not acquired_suboptimal:
             check(result, "vkAcquireNextImageKHR")
 
+        update_frame(image_index.value)
+
         self._device.device.vkResetFences(1, byref(fence))
 
         # semaphores that signal when the swapchain image is available
@@ -111,8 +117,6 @@ class VulkanBackend(Closable):
         )
         # pick the command buffer to bind and execute
         cmd_buffers = (vk.VkCommandBuffer * 1)(command_buffers[image_index.value])
-
-        update_frame(frame)
 
         # compile the submit info with the synchronization steps and the command buffer to execute
         submit_info = vk.VkSubmitInfo(
